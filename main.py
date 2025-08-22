@@ -8,7 +8,11 @@ import shutil, os
 app = FastAPI()
 
 # ---------------- CORS ----------------
-origins = ["http://localhost:3000"]  # your frontend
+origins = [
+    "http://localhost:3000",             # for local development
+    "https://estateuro.onrender.com"     # your live frontend
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -18,7 +22,9 @@ app.add_middleware(
 )
 
 # ---------------- MongoDB ----------------
-client = MongoClient("mongodb://localhost:27017")
+# ⚠️ NOTE: On Render, you cannot use localhost MongoDB.
+# Replace with your MongoDB Atlas URI from environment variable.
+client = MongoClient(os.getenv("MONGODB_URL", "mongodb://localhost:27017"))
 db = client["realestate"]
 collection = db["properties"]
 
