@@ -1,17 +1,28 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from database import db
-from fastapi.responses import JSONResponse
 import cloudinary
 import cloudinary.uploader
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env
+load_dotenv()
 
 router = APIRouter()
 
-# Configure Cloudinary
+# Configure Cloudinary from env
+cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME")
+api_key = os.getenv("CLOUDINARY_API_KEY")
+api_secret = os.getenv("CLOUDINARY_API_SECRET")
+
+if not cloud_name or not api_key or not api_secret:
+    raise RuntimeError("Cloudinary environment variables are missing")
+
 cloudinary.config(
-    cloud_name = "<your_cloud_name>",  # or use env variables
-    api_key = "<your_api_key>",
-    api_secret = "<your_api_secret>",
-    secure = True
+    cloud_name=cloud_name,
+    api_key=api_key,
+    api_secret=api_secret,
+    secure=True
 )
 
 # Add property route
@@ -24,12 +35,10 @@ async def add_property(
     location: str = Form(...),
     image: UploadFile = File(...)
 ):
-    try:
-        # Validate image type
-        if image.content_type not in ["image/jpeg", "image/png"]:
-            raise HTTPException(status_code=400, detail="Invalid image type")
+    if image.content_type not in ["image/jpeg", "image/png"]:
+        raise HTTPException(status_code=400, detail="Invalid image type")
 
-        # Upload image to Cloudinary
+    try:
         result = cloudinary.uploader.upload(image.file, folder="estateuro_properties")
         image_url = result.get("secure_url")
 
@@ -51,16 +60,13 @@ async def add_property(
 # Get properties route
 @router.get("/properties")
 def get_properties(category: str = "", search: str = ""):
+    query = {}
+    if category:
+        query["category"] = category
+    if search:
+        query["title"] = {"$regex": search, "$options": "i"}
+
     try:
-        query = {}
-        if category:
-            query["category"] = category
-        if search:
-            query["title"] = {"$regex": search, "$options": "i"}
-
-        properties = list(db.properties.find(query, {"_id": 0}))
-        return properties
-
+        return list(db.properties.find(query, {"_id": 0}))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

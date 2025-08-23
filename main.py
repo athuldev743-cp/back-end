@@ -1,65 +1,46 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from routes.auth import router as auth_router, get_current_user
+from routes.property import router as property_router
 from database import db
-import cloudinary
-import cloudinary.uploader
-import os
 
-router = APIRouter()
+app = FastAPI()
 
-# Configure Cloudinary from environment variables
-cloudinary.config(
-    cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
-    api_key=os.environ.get("CLOUDINARY_API_KEY"),
-    api_secret=os.environ.get("CLOUDINARY_API_SECRET"),
-    secure=True
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://estateuro.onrender.com"],  # Your frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Add property route
-@router.post("/add-property")
-async def add_property(
-    title: str = Form(...),
-    description: str = Form(...),
-    price: float = Form(...),
-    category: str = Form(...),
-    location: str = Form(...),
-    image: UploadFile = File(...)
-):
+# Root route
+@app.get("/")
+def root():
+    return {"message": "Backend running successfully 🚀"}
+
+# Health check
+@app.get("/health")
+def health_check():
     try:
-        # Validate image type
-        if image.content_type not in ["image/jpeg", "image/png"]:
-            raise HTTPException(status_code=400, detail="Invalid image type")
-
-        # Upload image to Cloudinary
-        result = cloudinary.uploader.upload(image.file, folder="estateuro_properties")
-        image_url = result.get("secure_url")
-
-        property_data = {
-            "title": title,
-            "description": description,
-            "price": price,
-            "category": category,
-            "location": location,
-            "image": image_url
-        }
-
-        db.properties.insert_one(property_data)
-        return {"message": "Property added successfully!", "property": property_data}
-
+        db.list_collection_names()
+        return JSONResponse(
+            content={"status": "ok", "message": "Backend and database running!"},
+            status_code=200
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            content={"status": "error", "message": "Database connection failed", "details": str(e)},
+            status_code=500
+        )
 
-# Get properties route
-@router.get("/properties")
-def get_properties(category: str = "", search: str = ""):
-    try:
-        query = {}
-        if category:
-            query["category"] = category
-        if search:
-            query["title"] = {"$regex": search, "$options": "i"}
+# Include routers
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(property_router, prefix="/api", tags=["property"])
 
-        properties = list(db.properties.find(query, {"_id": 0}))
-        return properties
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# Example protected route
+@app.get("/api/protected")
+def protected_route(current_user: dict = Depends(get_current_user)):
+    return {"message": f"Hello {current_user['username']}, this is a protected route!"}
