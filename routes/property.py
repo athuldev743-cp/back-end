@@ -1,31 +1,12 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+# routes/property.py
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
 from database import db
-import cloudinary
-import cloudinary.uploader
-import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env
-load_dotenv()
+from routes.auth import get_current_user
+from cloudinary_config import cloudinary
+from pymongo.errors import DuplicateKeyError
 
 router = APIRouter()
 
-# Configure Cloudinary from env
-cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME")
-api_key = os.getenv("CLOUDINARY_API_KEY")
-api_secret = os.getenv("CLOUDINARY_API_SECRET")
-
-if not cloud_name or not api_key or not api_secret:
-    raise RuntimeError("Cloudinary environment variables are missing")
-
-cloudinary.config(
-    cloud_name=cloud_name,
-    api_key=api_key,
-    api_secret=api_secret,
-    secure=True
-)
-
-# Add property route
 @router.post("/add-property")
 async def add_property(
     title: str = Form(...),
@@ -33,14 +14,19 @@ async def add_property(
     price: float = Form(...),
     category: str = Form(...),
     location: str = Form(...),
-    image: UploadFile = File(...)
+    image: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
 ):
+    if price <= 0:
+        raise HTTPException(status_code=400, detail="Price must be positive")
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(status_code=400, detail="Invalid image type")
 
     try:
         result = cloudinary.uploader.upload(image.file, folder="estateuro_properties")
         image_url = result.get("secure_url")
+        if not image_url:
+            raise HTTPException(status_code=500, detail="Failed to upload image")
 
         property_data = {
             "title": title,
@@ -48,18 +34,26 @@ async def add_property(
             "price": price,
             "category": category,
             "location": location,
-            "image": image_url
+            "image": image_url,
+            "created_by": current_user["email"]
         }
 
         db.properties.insert_one(property_data)
         return {"message": "Property added successfully!", "property": property_data}
 
+    except DuplicateKeyError:
+        raise HTTPException(status_code=400, detail="Property with this title already exists")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Get properties route
+
 @router.get("/properties")
-def get_properties(category: str = "", search: str = ""):
+def get_properties(
+    category: str = "",
+    search: str = "",
+    skip: int = 0,
+    limit: int = Query(10, le=50)
+):
     query = {}
     if category:
         query["category"] = category
@@ -67,6 +61,6 @@ def get_properties(category: str = "", search: str = ""):
         query["title"] = {"$regex": search, "$options": "i"}
 
     try:
-        return list(db.properties.find(query, {"_id": 0}))
+        return list(db.properties.find(query, {"_id": 0}).skip(skip).limit(limit))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

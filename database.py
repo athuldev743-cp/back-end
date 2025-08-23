@@ -1,18 +1,18 @@
+# database.py
 import os
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
-# Load MongoDB URL from environment variables
+load_dotenv()
+
 MONGO_URL = os.getenv("MONGO_URL")
 if not MONGO_URL:
     raise RuntimeError("MONGO_URL environment variable is missing")
 
-# Connect to MongoDB
 client = MongoClient(MONGO_URL)
-
-# Database name
 db = client["realestate"]
 
-# Optional: Check connection at startup
+# Optional: Test connection
 try:
     client.admin.command("ping")
     print("MongoDB connection successful ✅")
