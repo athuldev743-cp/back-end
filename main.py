@@ -1,15 +1,14 @@
 # main.py
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes.auth import router as auth_router
-from routes.property import router as property_router
+from routes import auth, property  # make sure both files exist inside routes/
 
 app = FastAPI()
 
-# CORS middleware
+# CORS setup (allow frontend to talk to backend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://estateuro.onrender.com"],  # replace with your frontend URL if needed
+    allow_origins=["*"],  # Replace "*" with your frontend URL in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,6 +19,6 @@ app.add_middleware(
 def root():
     return {"message": "Backend running successfully 🚀"}
 
-# Include routers
-app.include_router(auth_router, prefix="/auth", tags=["auth"])
-app.include_router(property_router, prefix="/api", tags=["property"])
+# Routers
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(property.router, prefix="/api", tags=["property"])

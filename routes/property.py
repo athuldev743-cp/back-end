@@ -1,85 +1,51 @@
 # routes/property.py
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from database import db
-from routes.auth import get_current_user
-from cloudinary_config import cloudinary
-from pymongo.errors import DuplicateKeyError
-from bson import ObjectId
+from cloudinary.uploader import upload
+from routes.auth import get_current_user  # for protected routes
 
 router = APIRouter()
 
+# ---------- Add Property ----------
 @router.post("/add-property")
 async def add_property(
     title: str = Form(...),
     description: str = Form(...),
     price: float = Form(...),
-    category: str = Form(...),
     location: str = Form(...),
     image: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),  # only logged-in users can add
 ):
-    if price <= 0:
-        raise HTTPException(status_code=400, detail="Price must be positive")
-    if image.content_type not in ["image/jpeg", "image/png"]:
-        raise HTTPException(status_code=400, detail="Invalid image type")
-
     try:
-        result = cloudinary.uploader.upload(image.file, folder="estateuro_properties")
-        image_url = result.get("secure_url")
-        if not image_url:
-            raise HTTPException(status_code=500, detail="Failed to upload image")
+        # Upload image to Cloudinary
+        upload_result = upload(image.file, folder="real-estate-app")
+        image_url = upload_result.get("secure_url")
 
         property_data = {
             "title": title,
             "description": description,
             "price": price,
-            "category": category,
             "location": location,
-            "image": image_url,
-            "created_by": current_user["email"]
+            "image_url": image_url,
+            "owner": current_user["email"],
         }
 
-        inserted = db.properties.insert_one(property_data)
-        property_data["_id"] = str(inserted.inserted_id)  # return ID as string
-        return {"message": "Property added successfully!", "property": property_data}
+        db.properties.insert_one(property_data)
+        return {"message": "Property added successfully", "property": property_data}
 
-    except DuplicateKeyError:
-        raise HTTPException(status_code=400, detail="Property with this title already exists")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ---------- Get All Properties (public) ----------
 @router.get("/properties")
-def get_properties(
-    category: str = "",
-    search: str = "",
-    skip: int = 0,
-    limit: int = Query(10, le=50)
-):
-    query = {}
-    if category:
-        query["category"] = category
-    if search:
-        query["title"] = {"$regex": search, "$options": "i"}
-
-    try:
-        properties = list(db.properties.find(query).skip(skip).limit(limit))
-        # Convert ObjectId to string
-        for prop in properties:
-            prop["_id"] = str(prop["_id"])
-        return properties
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def get_properties():
+    properties = list(db.properties.find({}, {"_id": 0}))  # exclude MongoDB _id
+    return {"properties": properties}
 
 
-@router.get("/properties/{property_id}")
-def get_property_detail(property_id: str):
-    """Get single property by ID"""
-    try:
-        property_item = db.properties.find_one({"_id": ObjectId(property_id)})
-        if not property_item:
-            raise HTTPException(status_code=404, detail="Property not found")
-        property_item["_id"] = str(property_item["_id"])
-        return property_item
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid property ID")
+# ---------- Get My Properties (protected) ----------
+@router.get("/my-properties")
+async def get_my_properties(current_user: dict = Depends(get_current_user)):
+    properties = list(db.properties.find({"owner": current_user["email"]}, {"_id": 0}))
+    return {"properties": properties}
