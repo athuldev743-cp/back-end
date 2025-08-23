@@ -9,7 +9,7 @@ MONGO_URL = os.getenv("MONGO_URL")
 if not MONGO_URL:
     raise RuntimeError("MONGO_URL environment variable is missing")
 
-client = MongoClient(MONGO_URL)
+client = MongoClient(MONGO_URL, tls=True, tlsAllowInvalidCertificates=False)
 db = client["realestate"]
 
 # Optional: Test connection
