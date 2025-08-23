@@ -1,12 +1,20 @@
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from database import db
-import shutil, os
+from fastapi.responses import JSONResponse
+import cloudinary
+import cloudinary.uploader
 
 router = APIRouter()
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Configure Cloudinary
+cloudinary.config(
+    cloud_name = "<your_cloud_name>",  # or use env variables
+    api_key = "<your_api_key>",
+    api_secret = "<your_api_secret>",
+    secure = True
+)
 
+# Add property route
 @router.post("/add-property")
 async def add_property(
     title: str = Form(...),
@@ -17,9 +25,13 @@ async def add_property(
     image: UploadFile = File(...)
 ):
     try:
-        file_location = f"{UPLOAD_FOLDER}/{image.filename}"
-        with open(file_location, "wb") as f:
-            shutil.copyfileobj(image.file, f)
+        # Validate image type
+        if image.content_type not in ["image/jpeg", "image/png"]:
+            raise HTTPException(status_code=400, detail="Invalid image type")
+
+        # Upload image to Cloudinary
+        result = cloudinary.uploader.upload(image.file, folder="estateuro_properties")
+        image_url = result.get("secure_url")
 
         property_data = {
             "title": title,
@@ -27,19 +39,28 @@ async def add_property(
             "price": price,
             "category": category,
             "location": location,
-            "image": f"/uploads/{image.filename}"
+            "image": image_url
         }
+
         db.properties.insert_one(property_data)
         return {"message": "Property added successfully!", "property": property_data}
+
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
-
+# Get properties route
 @router.get("/properties")
 def get_properties(category: str = "", search: str = ""):
-    query = {}
-    if category:
-        query["category"] = category
-    if search:
-        query["title"] = {"$regex": search, "$options": "i"}
-    return list(db.properties.find(query, {"_id": 0}))
+    try:
+        query = {}
+        if category:
+            query["category"] = category
+        if search:
+            query["title"] = {"$regex": search, "$options": "i"}
+
+        properties = list(db.properties.find(query, {"_id": 0}))
+        return properties
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

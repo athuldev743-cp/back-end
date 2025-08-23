@@ -1,52 +1,65 @@
-from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from routes.auth import router as auth_router, get_current_user
-from routes.property import router as property_router
-from database import db  # your MongoDB connection
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from database import db
+import cloudinary
+import cloudinary.uploader
+import os
 
-app = FastAPI()
+router = APIRouter()
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Change this to your frontend domain in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Configure Cloudinary from environment variables
+cloudinary.config(
+    cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.environ.get("CLOUDINARY_API_KEY"),
+    api_secret=os.environ.get("CLOUDINARY_API_SECRET"),
+    secure=True
 )
 
-# Root route
-@app.get("/")
-def root():
-    return {"message": "Backend running successfully 🚀"}
-
-# Health check route for Uptime Robot
-@app.get("/health")
-def health_check():
-    """
-    Endpoint to check backend and database health.
-    Returns 200 OK if backend is running and MongoDB is connected.
-    Returns 500 if database connection fails.
-    """
+# Add property route
+@router.post("/add-property")
+async def add_property(
+    title: str = Form(...),
+    description: str = Form(...),
+    price: float = Form(...),
+    category: str = Form(...),
+    location: str = Form(...),
+    image: UploadFile = File(...)
+):
     try:
-        # Check MongoDB connection by listing collections
-        db.list_collection_names()
-        return JSONResponse(
-            content={"status": "ok", "message": "Backend and database are running!"},
-            status_code=200
-        )
+        # Validate image type
+        if image.content_type not in ["image/jpeg", "image/png"]:
+            raise HTTPException(status_code=400, detail="Invalid image type")
+
+        # Upload image to Cloudinary
+        result = cloudinary.uploader.upload(image.file, folder="estateuro_properties")
+        image_url = result.get("secure_url")
+
+        property_data = {
+            "title": title,
+            "description": description,
+            "price": price,
+            "category": category,
+            "location": location,
+            "image": image_url
+        }
+
+        db.properties.insert_one(property_data)
+        return {"message": "Property added successfully!", "property": property_data}
+
     except Exception as e:
-        return JSONResponse(
-            content={"status": "error", "message": "Database connection failed", "details": str(e)},
-            status_code=500
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Include routers
-app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
-app.include_router(property_router, prefix="/api", tags=["property"])
+# Get properties route
+@router.get("/properties")
+def get_properties(category: str = "", search: str = ""):
+    try:
+        query = {}
+        if category:
+            query["category"] = category
+        if search:
+            query["title"] = {"$regex": search, "$options": "i"}
 
-# Example protected route
-@app.get("/api/protected")
-def protected_route(current_user: dict = Depends(get_current_user)):
-    return {"message": f"Hello {current_user['username']}, this is a protected route!"}
+        properties = list(db.properties.find(query, {"_id": 0}))
+        return properties
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
