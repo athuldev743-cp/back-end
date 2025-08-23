@@ -1,7 +1,9 @@
 # routes/property.py
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from database import db
-from cloudinary.uploader import upload
+import cloudinary.uploader
+import cloudinary  # make sure config loads
+import cloudinary_config  # 👈 this applies your .env settings
 from routes.auth import get_current_user  # for protected routes
 
 router = APIRouter()
@@ -18,7 +20,10 @@ async def add_property(
 ):
     try:
         # Upload image to Cloudinary
-        upload_result = upload(image.file, folder="real-estate-app")
+        upload_result = cloudinary.uploader.upload(
+            image.file,
+            folder="real-estate-app"
+        )
         image_url = upload_result.get("secure_url")
 
         property_data = {
