@@ -3,14 +3,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from routes.auth import router as auth_router, get_current_user
 from routes.property import router as property_router
-from database import db
+from database import db  # your MongoDB connection
 
 app = FastAPI()
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://estateuro.onrender.com"],  # Your frontend
+    allow_origins=[
+        "http://localhost:3000",  # dev frontend
+        "https://estateuro.onrender.com"  # deployed frontend
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,7 +40,7 @@ def health_check():
         )
 
 # Include routers
-app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(auth_router, prefix="/auth", tags=["auth"])  # Match frontend
 app.include_router(property_router, prefix="/api", tags=["property"])
 
 # Example protected route

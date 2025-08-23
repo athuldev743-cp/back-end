@@ -1,77 +1,52 @@
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import APIRouter, HTTPException, Depends, Form
+from fastapi.security import OAuth2PasswordRequestForm
 from passlib.context import CryptContext
-from jose import JWTError, jwt
+from jose import jwt
 from datetime import datetime, timedelta
-from pydantic import BaseModel
-from database import db
-import os
 
 router = APIRouter()
 
+# Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-SECRET_KEY = os.getenv("SECRET_KEY", "super_secret_key")
+
+# Dummy user storage (replace with MongoDB logic)
+fake_users_db = {
+    "test@test.com": {
+        "username": "testuser",
+        "email": "test@test.com",
+        "hashed_password": pwd_context.hash("123456")
+    }
+}
+
+SECRET_KEY = "your_secret_key_here"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
+def authenticate_user(email: str, password: str):
+    user = fake_users_db.get(email)
+    if not user:
+        return False
+    if not pwd_context.verify(password, user["hashed_password"]):
+        return False
+    return user
 
-class User(BaseModel):
-    username: str
-    password: str
-
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-
-def hash_password(password):
-    return pwd_context.hash(password)
-
-
-def verify_password(plain, hashed):
-    return pwd_context.verify(plain, hashed)
-
-
-def create_access_token(data: dict, expires_delta: timedelta = None):
+def create_access_token(data: dict, expires_delta: int = ACCESS_TOKEN_EXPIRE_MINUTES):
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    expire = datetime.utcnow() + timedelta(minutes=expires_delta)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
-
-@router.post("/register")
-def register(user: User):
-    if db.users.find_one({"username": user.username}):
-        raise HTTPException(status_code=400, detail="Username already exists")
-    hashed = hash_password(user.password)
-    db.users.insert_one({"username": user.username, "password": hashed})
-    return {"message": "User registered successfully"}
-
-
-@router.post("/login", response_model=Token)
-def login(user: User):
-    db_user = db.users.find_one({"username": user.username})
-    if not db_user or not verify_password(user.password, db_user["password"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    access_token = create_access_token(
-        data={"sub": user.username},
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
+# Login route
+@router.post("/login")
+def login(email: str = Form(...), password: str = Form(...)):
+    user = authenticate_user(email, password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    access_token = create_access_token({"sub": user["email"]})
     return {"access_token": access_token, "token_type": "bearer"}
 
-
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if not username:
-            raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    user = db.users.find_one({"username": username})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
+# Optional: Protected user route
+@router.get("/me")
+def get_current_user(current_user: dict = Depends(lambda: fake_users_db["test@test.com"])):
+    return {"user": current_user}
