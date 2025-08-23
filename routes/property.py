@@ -4,6 +4,7 @@ from database import db
 from routes.auth import get_current_user
 from cloudinary_config import cloudinary
 from pymongo.errors import DuplicateKeyError
+from bson import ObjectId
 
 router = APIRouter()
 
@@ -38,7 +39,8 @@ async def add_property(
             "created_by": current_user["email"]
         }
 
-        db.properties.insert_one(property_data)
+        inserted = db.properties.insert_one(property_data)
+        property_data["_id"] = str(inserted.inserted_id)  # return ID as string
         return {"message": "Property added successfully!", "property": property_data}
 
     except DuplicateKeyError:
@@ -61,6 +63,23 @@ def get_properties(
         query["title"] = {"$regex": search, "$options": "i"}
 
     try:
-        return list(db.properties.find(query, {"_id": 0}).skip(skip).limit(limit))
+        properties = list(db.properties.find(query).skip(skip).limit(limit))
+        # Convert ObjectId to string
+        for prop in properties:
+            prop["_id"] = str(prop["_id"])
+        return properties
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/properties/{property_id}")
+def get_property_detail(property_id: str):
+    """Get single property by ID"""
+    try:
+        property_item = db.properties.find_one({"_id": ObjectId(property_id)})
+        if not property_item:
+            raise HTTPException(status_code=404, detail="Property not found")
+        property_item["_id"] = str(property_item["_id"])
+        return property_item
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid property ID")
