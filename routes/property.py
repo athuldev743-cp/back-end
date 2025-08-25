@@ -1,8 +1,8 @@
+# property.py
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from database import db
 import cloudinary.uploader
-import cloudinary
-import cloudinary_config
+from cloudinary_config import *   # ✅ ensures Cloudinary is configured
 from routes.auth import get_current_user
 
 router = APIRouter()
@@ -27,13 +27,19 @@ async def add_property(
                 detail=f"Invalid category. Must be one of {VALID_CATEGORIES}"
             )
 
-        # Upload image to Cloudinary
-        upload_result = cloudinary.uploader.upload(
-            image.file,
-            folder="real-estate-app"
-        )
+        # ✅ Upload image to Cloudinary
+        try:
+            upload_result = cloudinary.uploader.upload(
+                image.file,
+                folder="real-estate-app",
+                resource_type="auto"   # 👈 handles jpg, png, pdf, etc.
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
+
         image_url = upload_result.get("secure_url")
 
+        # ✅ Save property in DB
         property_data = {
             "title": title,
             "description": description,
