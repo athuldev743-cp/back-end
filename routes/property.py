@@ -1,5 +1,5 @@
 # property.py
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Query
 from database import db
 import cloudinary.uploader
 from cloudinary_config import *   # ✅ ensures Cloudinary is configured
@@ -10,6 +10,7 @@ router = APIRouter()
 
 VALID_CATEGORIES = ["house", "villa", "apartment", "farmlands", "plots", "buildings"]
 
+# ---------------- Add property ----------------
 @router.post("/add-property")
 async def add_property(
     title: str = Form(...),
@@ -52,10 +53,35 @@ async def add_property(
         }
 
         result = db.properties.insert_one(property_data)
-        # Convert MongoDB ObjectId to string
         property_data["_id"] = str(result.inserted_id)
 
         return {"message": "Property added successfully", "property": property_data}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------- My properties (logged-in user) ----------------
+@router.get("/my-properties")
+async def get_my_properties(current_user: dict = Depends(get_current_user)):
+    user_email = current_user["email"]
+    properties = list(db.properties.find({"owner": user_email}))
+    for prop in properties:
+        prop["_id"] = str(prop["_id"])
+    return properties
+
+
+# ---------------- Properties by category ----------------
+@router.get("/properties-by-category")
+async def get_properties_by_category(category: str = Query(...)):
+    if category.lower() not in VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category. Must be one of {VALID_CATEGORIES}"
+        )
+
+    properties = list(db.properties.find({"category": category.lower()}))
+    for prop in properties:
+        prop["_id"] = str(prop["_id"])
+    return properties
+
