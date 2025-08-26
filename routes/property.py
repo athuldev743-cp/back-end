@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from database import db
 import cloudinary.uploader
-from cloudinary_config import *  # ✅ Cloudinary config
+from cloudinary_config import *  # Cloudinary config
 from routes.auth import get_current_user
 from bson import ObjectId
 
@@ -22,11 +22,18 @@ async def add_property(
 ):
     try:
         if category.lower() not in VALID_CATEGORIES:
-            raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of {VALID_CATEGORIES}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid category. Must be one of {VALID_CATEGORIES}"
+            )
 
         # Upload image to Cloudinary
         try:
-            upload_result = cloudinary.uploader.upload(image.file, folder="real-estate-app", resource_type="auto")
+            upload_result = cloudinary.uploader.upload(
+                image.file,
+                folder="real-estate-app",
+                resource_type="auto"
+            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
 
@@ -63,7 +70,10 @@ async def get_my_properties(current_user: dict = Depends(get_current_user)):
 @router.get("/category/{category}")
 async def get_properties_by_category(category: str, search: str = None):
     if category.lower() not in VALID_CATEGORIES:
-        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of {VALID_CATEGORIES}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category. Must be one of {VALID_CATEGORIES}"
+        )
 
     query = {"category": category.lower()}
     if search:
@@ -74,18 +84,14 @@ async def get_properties_by_category(category: str, search: str = None):
         prop["_id"] = str(prop["_id"])
     return properties
 
-# ---------------- Top Deals (all properties) ----------------
-@router.get("/top-deals")
-async def get_top_deals():
-    properties = list(db.properties.find())
-    for prop in properties:
+# ---------------- Single property by ID ----------------
+@router.get("/property/{property_id}")
+async def get_property_by_id(property_id: str):
+    try:
+        prop = db.properties.find_one({"_id": ObjectId(property_id)})
+        if not prop:
+            raise HTTPException(status_code=404, detail="Property not found")
         prop["_id"] = str(prop["_id"])
-    return properties
-
-# ---------------- Search properties ----------------
-@router.get("/search")
-async def search_properties(query: str = ""):
-    properties = list(db.properties.find({"title": {"$regex": query, "$options": "i"}}))
-    for prop in properties:
-        prop["_id"] = str(prop["_id"])
-    return properties
+        return prop
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
