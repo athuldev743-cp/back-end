@@ -70,18 +70,22 @@ async def get_my_properties(current_user: dict = Depends(get_current_user)):
         prop["_id"] = str(prop["_id"])
     return properties
 
-
 # ---------------- Properties by category ----------------
-@router.get("/properties-by-category")
-async def get_properties_by_category(category: str = Query(...)):
+@router.get("/category/{category}")
+async def get_properties_by_category(category: str, search: str = None):
     if category.lower() not in VALID_CATEGORIES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid category. Must be one of {VALID_CATEGORIES}"
         )
 
-    properties = list(db.properties.find({"category": category.lower()}))
+    query = {"category": category.lower()}
+
+    # Optional search filter
+    if search:
+        query["title"] = {"$regex": search, "$options": "i"}
+
+    properties = list(db.properties.find(query))
     for prop in properties:
         prop["_id"] = str(prop["_id"])
-    return properties
-
+    return properties 
