@@ -74,9 +74,27 @@ def send_otp_email(to_email: str, otp: str):
 @router.post("/register")
 def register(request: RegisterRequest):
     existing = db.users.find_one({"email": request.email})
+
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
+        if existing.get("is_verified"):
+            # Already verified → cannot register again
+            raise HTTPException(status_code=400, detail="Email already registered")
+        else:
+            # User exists but not verified → resend OTP
+            otp = str(random.randint(100000, 999999))
+            expiry_time = datetime.utcnow() + timedelta(minutes=5)
+
+            db.users.update_one(
+                {"email": request.email},
+                {"$set": {"otp": otp, "otp_expires": expiry_time, "password": hash_password(request.password)}}
+            )
+
+            if not send_otp_email(request.email, otp):
+                raise HTTPException(status_code=500, detail="Failed to send OTP email")
+
+            return {"message": "Email already registered but not verified. New OTP sent."}
+
+    # New user registration
     hashed_pw = hash_password(request.password)
     otp = str(random.randint(100000, 999999))
     expiry_time = datetime.utcnow() + timedelta(minutes=5)
@@ -87,7 +105,7 @@ def register(request: RegisterRequest):
         "otp": otp,
         "otp_expires": expiry_time,
         "is_verified": False,
-        "activities": []  # <-- initialize activities list
+        "activities": []
     })
 
     if not send_otp_email(request.email, otp):
