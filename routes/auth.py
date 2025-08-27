@@ -7,6 +7,8 @@ from jose import jwt
 from datetime import datetime, timedelta
 from database import db
 import os
+import random
+import smtplib
 
 router = APIRouter()
 
@@ -18,17 +20,18 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-
 # ----------- Models -----------
 class RegisterRequest(BaseModel):
     email: str
     password: str
 
+class OTPVerifyRequest(BaseModel):
+    email: str
+    otp: str
 
 class LoginRequest(BaseModel):
     email: str
     password: str
-
 
 # ----------- Utils -----------
 def create_access_token(data: dict, expires_delta: int = ACCESS_TOKEN_EXPIRE_MINUTES):
@@ -37,25 +40,62 @@ def create_access_token(data: dict, expires_delta: int = ACCESS_TOKEN_EXPIRE_MIN
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
-
 
 def hash_password(password: str):
     return pwd_context.hash(password)
 
+def send_otp_email(to_email: str, otp: str):
+    # Simple SMTP example (replace with your email credentials or service)
+    sender = "your-email@example.com"
+    password = "your-email-password"
+    subject = "Your OTP for Estateuro Registration"
+    body = f"Your OTP is: {otp}"
+    message = f"Subject: {subject}\n\n{body}"
+    
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender, password)
+            server.sendmail(sender, to_email, message)
+    except Exception as e:
+        print("Error sending email:", e)
 
 # ----------- Routes -----------
+
 @router.post("/register")
 def register(request: RegisterRequest):
     existing = db.users.find_one({"email": request.email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-
+    
     hashed_pw = hash_password(request.password)
-    db.users.insert_one({"email": request.email, "password": hashed_pw})
-    return {"message": "User registered successfully"}
+    otp = str(random.randint(100000, 999999))
+    db.users.insert_one({
+        "email": request.email,
+        "password": hashed_pw,
+        "otp": otp,
+        "is_verified": False
+    })
+
+    send_otp_email(request.email, otp)
+    return {"message": "OTP sent to your email. Verify to complete registration."}
+
+
+@router.post("/verify-otp")
+def verify_otp(request: OTPVerifyRequest):
+    user = db.users.find_one({"email": request.email})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.get("otp") != request.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    
+    db.users.update_one(
+        {"email": request.email},
+        {"$set": {"is_verified": True}, "$unset": {"otp": ""}}
+    )
+    return {"message": "Email verified successfully. You can now log in."}
 
 
 @router.post("/login")
@@ -63,6 +103,8 @@ def login(request: LoginRequest):
     user = db.users.find_one({"email": request.email})
     if not user or not verify_password(request.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not user.get("is_verified", False):
+        raise HTTPException(status_code=403, detail="Email not verified")
 
     token = create_access_token({"email": request.email})
     return {"access_token": token, "token_type": "bearer"}
