@@ -9,7 +9,8 @@ router = APIRouter()
 
 VALID_CATEGORIES = ["house", "villa", "apartment", "farmlands", "plots", "buildings"]
 
-# ---------------- Add property ----------------@router.post("/add-property")
+# ---------------- Add property ----------------
+@router.post("/add-property")
 async def add_property(
     title: str = Form(...),
     description: str = Form(...),
@@ -58,9 +59,6 @@ async def add_property(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 # ---------------- My properties (logged-in user) ----------------
 @router.get("/my-properties")
 async def get_my_properties(current_user: dict = Depends(get_current_user)):
@@ -99,3 +97,15 @@ async def get_property_by_id(property_id: str):
         return prop
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------- All properties ----------------
+@router.get("/properties")
+async def get_all_properties(search: str = None):
+    query = {}
+    if search:
+        query["title"] = {"$regex": search, "$options": "i"}
+
+    properties = list(db.properties.find(query))
+    for prop in properties:
+        prop["_id"] = str(prop["_id"])
+    return properties
