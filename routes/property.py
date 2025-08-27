@@ -9,14 +9,14 @@ router = APIRouter()
 
 VALID_CATEGORIES = ["house", "villa", "apartment", "farmlands", "plots", "buildings"]
 
-# ---------------- Add property ----------------
-@router.post("/add-property")
+# ---------------- Add property ----------------@router.post("/add-property")
 async def add_property(
     title: str = Form(...),
     description: str = Form(...),
     price: float = Form(...),
     location: str = Form(...),
     category: str = Form(...),
+    mobileNO: str = Form(...),  # ✅ mandatory mobile field added
     image: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
@@ -47,12 +47,16 @@ async def add_property(
             "category": category.lower(),
             "image_url": image_url,
             "owner": current_user["email"],
+            "mobileNO": mobileNO,  # ✅ set from form
         }
 
         result = db.properties.insert_one(property_data)
         property_data["_id"] = str(result.inserted_id)
 
         return {"message": "Property added successfully", "property": property_data}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
