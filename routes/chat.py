@@ -5,7 +5,7 @@ import redis.asyncio as aioredis
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # loads .env file
+load_dotenv()
 
 router = APIRouter()
 
@@ -25,18 +25,17 @@ async def get_redis():
         redis_conn_instance = await aioredis.from_url(REDIS_URI)
     return redis_conn_instance
 
-# Local WebSocket connections per chat
 connected_clients = {}
 
-@router.websocket("/ws/{chat_id}/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, chat_id: str, user_id: str):
+@router.websocket("/ws/{chat_id}/{user_id}/{property_id}/{owner_id}")
+async def websocket_endpoint(websocket: WebSocket, chat_id: str, user_id: str, property_id: str, owner_id: str):
     await websocket.accept()
 
     if chat_id not in connected_clients:
         connected_clients[chat_id] = {}
     connected_clients[chat_id][user_id] = websocket
 
-    # Send previous messages from MongoDB
+    # Send previous messages
     chat_doc = chats_collection.find_one({"chat_id": chat_id})
     if chat_doc:
         for msg in chat_doc.get("messages", []):
@@ -60,25 +59,32 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str, user_id: str):
         while True:
             data = await websocket.receive_text()
 
-            # Save message in MongoDB
+            # Save message in MongoDB with unread flag
             chats_collection.update_one(
                 {"chat_id": chat_id},
-                {"$push": {"messages": {"sender": user_id, "text": data}}},
+                {
+                    "$set": {"property_id": property_id, "property_owner": owner_id},
+                    "$push": {
+                        "messages": {
+                            "sender": user_id,
+                            "text": data,
+                            "read": False  # 👈 unread flag
+                        }
+                    },
+                },
                 upsert=True
             )
 
-            # Publish message to Redis channel
+            # Publish to Redis
             await redis_conn.publish(chat_id, f"{user_id}: {data}")
 
-            # Send to local clients immediately
+            # Send to local clients
             for uid, client_ws in connected_clients.get(chat_id, {}).items():
                 if uid != user_id:
                     await client_ws.send_text(f"{user_id}: {data}")
 
     except WebSocketDisconnect:
         print(f"User {user_id} disconnected from chat {chat_id}")
-    except Exception as e:
-        print(f"Error in WebSocket chat {chat_id} for user {user_id}: {e}")
     finally:
         listener_task.cancel()
         if chat_id in connected_clients and user_id in connected_clients[chat_id]:

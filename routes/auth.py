@@ -1,7 +1,7 @@
 # routes/auth.py
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from jose import jwt
 from datetime import datetime, timedelta
@@ -12,7 +12,7 @@ import smtplib
 
 router = APIRouter()
 
-# Security
+# ---------------- Security ----------------
 SECRET_KEY = os.getenv("JWT_SECRET", "supersecret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -20,20 +20,24 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-# ----------- Models -----------
+# ---------------- Models ----------------
 class RegisterRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
 
 class OTPVerifyRequest(BaseModel):
-    email: str
+    email: EmailStr
     otp: str
 
 class LoginRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
 
-# ----------- Utils -----------
+class ResendOTPRequest(BaseModel):
+    email: EmailStr
+
+
+# ---------------- Utils ----------------
 def create_access_token(data: dict, expires_delta: int = ACCESS_TOKEN_EXPIRE_MINUTES):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=expires_delta)
@@ -47,22 +51,25 @@ def hash_password(password: str):
     return pwd_context.hash(password)
 
 def send_otp_email(to_email: str, otp: str):
-    # Simple SMTP example (replace with your email credentials or service)
-    sender = "your-email@example.com"
-    password = "your-email-password"
+    sender = os.getenv("SMTP_USER")
+    password = os.getenv("SMTP_PASS")
     subject = "Your OTP for Estateuro Registration"
-    body = f"Your OTP is: {otp}"
+    body = f"Your OTP is: {otp}\nThis OTP will expire in 5 minutes."
     message = f"Subject: {subject}\n\n{body}"
     
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"), int(os.getenv("SMTP_PORT", 587))) as server:
             server.starttls()
             server.login(sender, password)
             server.sendmail(sender, to_email, message)
+        print(f"✅ OTP sent to {to_email}")
+        return True
     except Exception as e:
-        print("Error sending email:", e)
+        print("❌ Error sending email:", e)
+        return False
 
-# ----------- Routes -----------
+
+# ---------------- Routes ----------------
 
 @router.post("/register")
 def register(request: RegisterRequest):
@@ -72,15 +79,43 @@ def register(request: RegisterRequest):
     
     hashed_pw = hash_password(request.password)
     otp = str(random.randint(100000, 999999))
+    expiry_time = datetime.utcnow() + timedelta(minutes=5)
+
     db.users.insert_one({
         "email": request.email,
         "password": hashed_pw,
         "otp": otp,
-        "is_verified": False
+        "otp_expires": expiry_time,
+        "is_verified": False,
+        "activities": []  # <-- initialize activities list
     })
 
-    send_otp_email(request.email, otp)
+    if not send_otp_email(request.email, otp):
+        raise HTTPException(status_code=500, detail="Failed to send OTP email")
+
     return {"message": "OTP sent to your email. Verify to complete registration."}
+
+
+@router.post("/resend-otp")
+def resend_otp(request: ResendOTPRequest):
+    user = db.users.find_one({"email": request.email})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.get("is_verified"):
+        raise HTTPException(status_code=400, detail="Email already verified")
+
+    otp = str(random.randint(100000, 999999))
+    expiry_time = datetime.utcnow() + timedelta(minutes=5)
+
+    db.users.update_one(
+        {"email": request.email},
+        {"$set": {"otp": otp, "otp_expires": expiry_time}}
+    )
+
+    if not send_otp_email(request.email, otp):
+        raise HTTPException(status_code=500, detail="Failed to send OTP email")
+
+    return {"message": "New OTP sent to your email."}
 
 
 @router.post("/verify-otp")
@@ -90,10 +125,12 @@ def verify_otp(request: OTPVerifyRequest):
         raise HTTPException(status_code=404, detail="User not found")
     if user.get("otp") != request.otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
-    
+    if datetime.utcnow() > user.get("otp_expires", datetime.utcnow()):
+        raise HTTPException(status_code=400, detail="OTP expired")
+
     db.users.update_one(
         {"email": request.email},
-        {"$set": {"is_verified": True}, "$unset": {"otp": ""}}
+        {"$set": {"is_verified": True}, "$unset": {"otp": "", "otp_expires": ""}}
     )
     return {"message": "Email verified successfully. You can now log in."}
 
@@ -110,19 +147,7 @@ def login(request: LoginRequest):
     return {"access_token": token, "token_type": "bearer"}
 
 
-@router.get("/me")
-def get_me(token: str = Depends(oauth2_scheme)):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("email")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return {"email": email}
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-
-# Dependency for property routes
+# Dependency for other routes
 def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
