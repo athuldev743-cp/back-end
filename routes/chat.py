@@ -1,10 +1,9 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from pymongo import MongoClient
 import asyncio
 import redis.asyncio as aioredis
 import os
 from dotenv import load_dotenv
-from routes.auth import get_current_user, SECRET_KEY, ALGORITHM
 from jose import jwt, JWTError
 import json
 
@@ -30,6 +29,19 @@ async def get_redis():
 # ---------------- Connected clients ----------------
 connected_clients = {}  # chat_id -> { user_email: websocket }
 
+# ---------------- Auth helper ----------------
+def get_user_from_token(token: str):
+    from routes.auth import SECRET_KEY, ALGORITHM
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("email")
+        if not email:
+            return None
+        user = db.users.find_one({"email": email})
+        return user
+    except JWTError:
+        return None
+
 # ---------------- WebSocket ----------------
 @router.websocket("/ws/{chat_id}/{property_id}")
 async def websocket_endpoint(
@@ -38,18 +50,8 @@ async def websocket_endpoint(
     property_id: str,
     token: str = Query(...)
 ):
-    # Authenticate user via token
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("email")
-        if not email:
-            await websocket.close(code=1008)
-            return
-        user = db.users.find_one({"email": email})
-        if not user:
-            await websocket.close(code=1008)
-            return
-    except JWTError:
+    user = get_user_from_token(token)
+    if not user:
         await websocket.close(code=1008)
         return
 
@@ -79,7 +81,6 @@ async def websocket_endpoint(
                     msg_json = json.loads(message["data"].decode())
                 except json.JSONDecodeError:
                     continue
-                # Send to all connected clients except sender
                 for uid, client_ws in connected_clients.get(chat_id, {}).items():
                     if uid != msg_json.get("sender") and client_ws.application_state == WebSocket.STATE_CONNECTED:
                         await client_ws.send_json(msg_json)
@@ -92,8 +93,7 @@ async def websocket_endpoint(
             msg = {
                 "sender": user_email,
                 "text": data.get("text", ""),
-                "read": False,
-                "timestamp": data.get("timestamp", None)
+                "read": False
             }
 
             # Save in MongoDB
@@ -121,12 +121,15 @@ async def websocket_endpoint(
             del connected_clients[chat_id]
         await pubsub.unsubscribe(chat_id)
 
-# ---------------- Inbox ----------------
+# ---------------- Inbox & Notifications ----------------
 @router.get("/inbox")
-def get_owner_inbox(current_user: dict = Depends(get_current_user)):
+def get_owner_inbox():
+    # Import here to avoid circular import
+    from routes.auth import get_current_user
+    from fastapi import Depends
+    current_user = Depends(get_current_user)()
     owner_email = current_user["email"]
 
-    # Find all chats where this user is the property owner
     chats = list(chats_collection.find({"property_owner": owner_email}))
 
     inbox = []
@@ -143,15 +146,17 @@ def get_owner_inbox(current_user: dict = Depends(get_current_user)):
             "unread_count": unread_count
         })
 
-    # Sort inbox by last message timestamp
+    # Sort inbox by last message time (newest first)
     inbox.sort(key=lambda x: x["last_message"]["timestamp"] if x["last_message"] else 0, reverse=True)
-
     return {"inbox": inbox}
 
-# ---------------- Mark messages as read ----------------
 @router.post("/mark-read/{chat_id}")
-def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
+def mark_messages_as_read(chat_id: str):
+    from routes.auth import get_current_user
+    from fastapi import Depends
+    current_user = Depends(get_current_user)()
     owner_email = current_user["email"]
+
     chats_collection.update_one(
         {"chat_id": chat_id, "property_owner": owner_email},
         {"$set": {"messages.$[elem].read": True}},
