@@ -1,17 +1,13 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
-from fastapi.security import OAuth2PasswordBearer
+# routes/auth.py
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from jose import jwt
 from datetime import datetime, timedelta
 from database import db
-import os
-import random
-import smtplib
+import os, random, smtplib
 from dotenv import load_dotenv
-from routes.auth import get_current_user
-from fastapi import Header
-
+from routes.dependencies import get_current_user  # ✅ updated
 
 load_dotenv()
 router = APIRouter()
@@ -22,7 +18,6 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 # ---------------- Models ----------------
 class UserRegister(BaseModel):
@@ -60,7 +55,6 @@ def send_otp_email(to_email: str, otp: str):
     subject = "Your OTP for Estateuro Registration"
     body = f"Your OTP is: {otp}\nThis OTP will expire in 5 minutes."
     message = f"Subject: {subject}\n\n{body}"
-    
     try:
         with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"), int(os.getenv("SMTP_PORT", 587))) as server:
             server.starttls()
@@ -161,22 +155,3 @@ def login(request: UserLogin):
 
     token = create_access_token({"email": request.email})
     return {"access_token": token, "token_type": "bearer", "fullName": user["fullName"]}
-
-# ---------------- Current User ----------------
-def get_current_user(authorization: str = Header(...)):
-    """
-    Extracts the Bearer token from Authorization header and returns the current user.
-    Example header: "Authorization: Bearer <token>"
-    """
-    try:
-        token = authorization.split(" ")[1]  # get the token part
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("email")
-        if not email:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        user = db.users.find_one({"email": email})
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-        return user
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
