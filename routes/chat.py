@@ -1,5 +1,5 @@
-# routes/chat_ws.py
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+# routes/chat.py
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from pymongo import MongoClient
 import asyncio
 import redis.asyncio as aioredis
@@ -7,7 +7,8 @@ import os
 from dotenv import load_dotenv
 from routes.auth import get_current_user
 import json
-
+from typing import Dict
+from fastapi import Depends
 
 load_dotenv()
 router = APIRouter()
@@ -33,8 +34,13 @@ connected_clients = {}  # chat_id -> { user_email: websocket }
 
 # ---------------- WebSocket ----------------
 @router.websocket("/ws/{chat_id}/{property_id}")
-async def websocket_endpoint(websocket: WebSocket, chat_id: str, property_id: str, token: str):
-    # Authenticate user using get_current_user
+async def websocket_endpoint(
+    websocket: WebSocket,
+    chat_id: str,
+    property_id: str,
+    token: str = Query(...)
+):
+    # Authenticate user
     try:
         current_user = get_current_user(token)
         user_email = current_user["email"]
@@ -64,11 +70,11 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str, property_id: st
     async def redis_listener():
         async for message in pubsub.listen():
             if message["type"] == "message":
-                data = message["data"].decode()
                 try:
-                    msg_json = json.loads(data)
-                except:
+                    msg_json = json.loads(message["data"].decode())
+                except json.JSONDecodeError:
                     continue
+
                 # Send to all clients except sender
                 for uid, client_ws in connected_clients.get(chat_id, {}).items():
                     if uid != msg_json.get("sender") and client_ws.application_state == WebSocket.STATE_CONNECTED:
@@ -78,7 +84,7 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str, property_id: st
 
     try:
         while True:
-            data = await websocket.receive_json()  # Expect JSON { sender, text }
+            data = await websocket.receive_json()  # Expect JSON { text }
             msg = {
                 "sender": user_email,
                 "text": data.get("text", ""),
