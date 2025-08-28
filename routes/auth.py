@@ -15,21 +15,22 @@ router = APIRouter()
 # ---------------- Security ----------------
 SECRET_KEY = os.getenv("JWT_SECRET", "supersecret")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days for persistent login
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 # ---------------- Models ----------------
-class RegisterRequest(BaseModel):
+class UserRegister(BaseModel):
+    fullName: str
     email: EmailStr
     password: str
 
-class OTPVerifyRequest(BaseModel):
+class UserVerifyOTP(BaseModel):
     email: EmailStr
     otp: str
 
-class LoginRequest(BaseModel):
+class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
@@ -70,34 +71,34 @@ def send_otp_email(to_email: str, otp: str):
 # ---------------- Routes ----------------
 
 @router.post("/register")
-def register(request: RegisterRequest):
+def register(request: UserRegister):
     existing = db.users.find_one({"email": request.email})
 
     if existing:
         if existing.get("is_verified"):
-            # Already verified → cannot register again
             raise HTTPException(status_code=400, detail="Email already registered")
         else:
-            # User exists but not verified → resend OTP
             otp = str(random.randint(100000, 999999))
             expiry_time = datetime.utcnow() + timedelta(minutes=5)
-
             db.users.update_one(
                 {"email": request.email},
-                {"$set": {"otp": otp, "otp_expires": expiry_time, "password": hash_password(request.password)}}
+                {"$set": {
+                    "otp": otp,
+                    "otp_expires": expiry_time,
+                    "password": hash_password(request.password),
+                    "fullName": request.fullName
+                }}
             )
-
             if not send_otp_email(request.email, otp):
                 raise HTTPException(status_code=500, detail="Failed to send OTP email")
-
             return {"message": "Email already registered but not verified. New OTP sent."}
 
-    # New user registration
     hashed_pw = hash_password(request.password)
     otp = str(random.randint(100000, 999999))
     expiry_time = datetime.utcnow() + timedelta(minutes=5)
 
     db.users.insert_one({
+        "fullName": request.fullName,
         "email": request.email,
         "password": hashed_pw,
         "otp": otp,
@@ -133,7 +134,7 @@ def resend_otp(request: ResendOTPRequest):
     return {"message": "New OTP sent to your email."}
 
 @router.post("/verify-otp")
-def verify_otp(request: OTPVerifyRequest):
+def verify_otp(request: UserVerifyOTP):
     user = db.users.find_one({"email": request.email})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -147,12 +148,11 @@ def verify_otp(request: OTPVerifyRequest):
         {"$set": {"is_verified": True}, "$unset": {"otp": "", "otp_expires": ""}}
     )
 
-    # ✅ Automatically generate token after OTP verification
     token = create_access_token({"email": request.email})
-    return {"message": "Email verified successfully. You are now logged in.", "token": token}
+    return {"message": "Email verified successfully.", "token": token, "fullName": user["fullName"]}
 
 @router.post("/login")
-def login(request: LoginRequest):
+def login(request: UserLogin):
     user = db.users.find_one({"email": request.email})
     if not user or not verify_password(request.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -160,7 +160,7 @@ def login(request: LoginRequest):
         raise HTTPException(status_code=403, detail="Email not verified")
 
     token = create_access_token({"email": request.email})
-    return {"access_token": token, "token_type": "bearer"}
+    return {"access_token": token, "token_type": "bearer", "fullName": user["fullName"]}
 
 # ---------------- Current User ----------------
 def get_current_user(token: str = Depends(oauth2_scheme)):
