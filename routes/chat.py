@@ -9,6 +9,7 @@ from routes.auth import SECRET_KEY, ALGORITHM
 from jose import jwt, JWTError
 import json
 from fastapi import Depends
+from fastapi import get_current_user
 
 
 load_dotenv()
@@ -156,3 +157,25 @@ def mark_messages_as_read(chat_id: str, current_user: dict = Depends(lambda: get
         array_filters=[{"elem.read": False, "elem.sender": {"$ne": owner_id}}]
     )
     return {"status": "ok"}
+@router.get("/inbox")
+def get_owner_inbox(current_user: dict = Depends(get_current_user)):
+    owner_email = current_user["email"]
+    
+    # Find all chats where this user is owner
+    chats = list(chats_collection.find({"property_owner": owner_email}))
+    
+    # Format for frontend
+    inbox = []
+    for chat in chats:
+        last_msg = chat["messages"][-1] if chat.get("messages") else None
+        unread_count = sum(1 for m in chat.get("messages", []) if not m.get("read", True) and m.get("sender") != owner_email)
+        
+        inbox.append({
+            "chat_id": chat["chat_id"],
+            "property_id": chat["property_id"],
+            "last_message": last_msg,
+            "unread_count": unread_count
+        })
+    
+    return {"inbox": inbox}
+
