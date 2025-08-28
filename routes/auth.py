@@ -9,6 +9,9 @@ import os
 import random
 import smtplib
 from dotenv import load_dotenv
+from routes.auth import get_current_user
+from fastapi import Header
+
 
 load_dotenv()
 router = APIRouter()
@@ -160,12 +163,16 @@ def login(request: UserLogin):
     return {"access_token": token, "token_type": "bearer", "fullName": user["fullName"]}
 
 # ---------------- Current User ----------------
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    """Decode JWT token and return the user dict"""
+def get_current_user(authorization: str = Header(...)):
+    """
+    Extracts the Bearer token from Authorization header and returns the current user.
+    Example header: "Authorization: Bearer <token>"
+    """
     try:
+        token = authorization.split(" ")[1]  # get the token part
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("email")
-        if email is None:
+        email = payload.get("email")
+        if not email:
             raise HTTPException(status_code=401, detail="Invalid token")
         user = db.users.find_one({"email": email})
         if not user:
@@ -173,7 +180,3 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         return user
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-@router.get("/me")
-def get_me(current_user: dict = Depends(get_current_user)):
-    return {"email": current_user["email"], "fullName": current_user["fullName"]}

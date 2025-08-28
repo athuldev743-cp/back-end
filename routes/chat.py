@@ -1,16 +1,12 @@
-# routes/chat.py
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
 from pymongo import MongoClient
 import asyncio
 import redis.asyncio as aioredis
 import os
 from dotenv import load_dotenv
-from routes.auth import SECRET_KEY, ALGORITHM
+from routes.auth import get_current_user, SECRET_KEY, ALGORITHM
 from jose import jwt, JWTError
 import json
-from fastapi import Depends
-from fastapi import get_current_user
-
 
 load_dotenv()
 router = APIRouter()
@@ -34,18 +30,6 @@ async def get_redis():
 # ---------------- Connected clients ----------------
 connected_clients = {}  # chat_id -> { user_email: websocket }
 
-# ---------------- Auth helper ----------------
-def get_user_from_token(token: str):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("email")
-        if not email:
-            return None
-        user = db.users.find_one({"email": email})
-        return user
-    except JWTError:
-        return None
-
 # ---------------- WebSocket ----------------
 @router.websocket("/ws/{chat_id}/{property_id}")
 async def websocket_endpoint(
@@ -54,14 +38,22 @@ async def websocket_endpoint(
     property_id: str,
     token: str = Query(...)
 ):
-    # Authenticate user
-    user = get_user_from_token(token)
-    if not user:
+    # Authenticate user via token
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("email")
+        if not email:
+            await websocket.close(code=1008)
+            return
+        user = db.users.find_one({"email": email})
+        if not user:
+            await websocket.close(code=1008)
+            return
+    except JWTError:
         await websocket.close(code=1008)
         return
 
     user_email = user["email"]
-
     await websocket.accept()
 
     # Register client
@@ -87,7 +79,7 @@ async def websocket_endpoint(
                     msg_json = json.loads(message["data"].decode())
                 except json.JSONDecodeError:
                     continue
-
+                # Send to all connected clients except sender
                 for uid, client_ws in connected_clients.get(chat_id, {}).items():
                     if uid != msg_json.get("sender") and client_ws.application_state == WebSocket.STATE_CONNECTED:
                         await client_ws.send_json(msg_json)
@@ -100,7 +92,8 @@ async def websocket_endpoint(
             msg = {
                 "sender": user_email,
                 "text": data.get("text", ""),
-                "read": False
+                "read": False,
+                "timestamp": data.get("timestamp", None)
             }
 
             # Save in MongoDB
@@ -128,54 +121,40 @@ async def websocket_endpoint(
             del connected_clients[chat_id]
         await pubsub.unsubscribe(chat_id)
 
-# ---------------- Notifications ----------------
-@router.get("/notifications")
-def get_unread_chats(current_user: dict = Depends(lambda: get_user_from_token(Query(...)))):
-    owner_id = current_user["email"]
-    chats = chats_collection.find(
-        {"property_owner": owner_id, "messages.read": False},
-        {"chat_id": 1, "property_id": 1, "messages": 1}
-    )
-    result = []
-    for chat in chats:
-        unread_count = sum(1 for m in chat.get("messages", []) if not m.get("read", True) and m.get("sender") != owner_id)
-        if unread_count > 0:
-            result.append({
-                "chat_id": chat["chat_id"],
-                "property_id": chat["property_id"],
-                "unread_count": unread_count
-            })
-    return {"notifications": result}
-
-# ---------------- Mark messages as read ----------------
-@router.post("/mark-read/{chat_id}")
-def mark_messages_as_read(chat_id: str, current_user: dict = Depends(lambda: get_user_from_token(Query(...)))):
-    owner_id = current_user["email"]
-    chats_collection.update_one(
-        {"chat_id": chat_id, "property_owner": owner_id},
-        {"$set": {"messages.$[elem].read": True}},
-        array_filters=[{"elem.read": False, "elem.sender": {"$ne": owner_id}}]
-    )
-    return {"status": "ok"}
+# ---------------- Inbox ----------------
 @router.get("/inbox")
 def get_owner_inbox(current_user: dict = Depends(get_current_user)):
     owner_email = current_user["email"]
-    
-    # Find all chats where this user is owner
+
+    # Find all chats where this user is the property owner
     chats = list(chats_collection.find({"property_owner": owner_email}))
-    
-    # Format for frontend
+
     inbox = []
     for chat in chats:
         last_msg = chat["messages"][-1] if chat.get("messages") else None
-        unread_count = sum(1 for m in chat.get("messages", []) if not m.get("read", True) and m.get("sender") != owner_email)
-        
+        unread_count = sum(
+            1 for m in chat.get("messages", [])
+            if not m.get("read", True) and m.get("sender") != owner_email
+        )
         inbox.append({
             "chat_id": chat["chat_id"],
             "property_id": chat["property_id"],
             "last_message": last_msg,
             "unread_count": unread_count
         })
-    
+
+    # Sort inbox by last message timestamp
+    inbox.sort(key=lambda x: x["last_message"]["timestamp"] if x["last_message"] else 0, reverse=True)
+
     return {"inbox": inbox}
 
+# ---------------- Mark messages as read ----------------
+@router.post("/mark-read/{chat_id}")
+def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
+    owner_email = current_user["email"]
+    chats_collection.update_one(
+        {"chat_id": chat_id, "property_owner": owner_email},
+        {"$set": {"messages.$[elem].read": True}},
+        array_filters=[{"elem.read": False, "elem.sender": {"$ne": owner_email}}]
+    )
+    return {"status": "ok"}
