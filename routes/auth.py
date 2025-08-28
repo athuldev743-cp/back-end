@@ -15,7 +15,7 @@ router = APIRouter()
 # ---------------- Security ----------------
 SECRET_KEY = os.getenv("JWT_SECRET", "supersecret")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days for persistent login
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -35,7 +35,6 @@ class LoginRequest(BaseModel):
 
 class ResendOTPRequest(BaseModel):
     email: EmailStr
-
 
 # ---------------- Utils ----------------
 def create_access_token(data: dict, expires_delta: int = ACCESS_TOKEN_EXPIRE_MINUTES):
@@ -67,7 +66,6 @@ def send_otp_email(to_email: str, otp: str):
     except Exception as e:
         print("❌ Error sending email:", e)
         return False
-
 
 # ---------------- Routes ----------------
 
@@ -113,7 +111,6 @@ def register(request: RegisterRequest):
 
     return {"message": "OTP sent to your email. Verify to complete registration."}
 
-
 @router.post("/resend-otp")
 def resend_otp(request: ResendOTPRequest):
     user = db.users.find_one({"email": request.email})
@@ -135,7 +132,6 @@ def resend_otp(request: ResendOTPRequest):
 
     return {"message": "New OTP sent to your email."}
 
-
 @router.post("/verify-otp")
 def verify_otp(request: OTPVerifyRequest):
     user = db.users.find_one({"email": request.email})
@@ -150,8 +146,10 @@ def verify_otp(request: OTPVerifyRequest):
         {"email": request.email},
         {"$set": {"is_verified": True}, "$unset": {"otp": "", "otp_expires": ""}}
     )
-    return {"message": "Email verified successfully. You can now log in."}
 
+    # ✅ Automatically generate token after OTP verification
+    token = create_access_token({"email": request.email})
+    return {"message": "Email verified successfully. You are now logged in.", "token": token}
 
 @router.post("/login")
 def login(request: LoginRequest):
@@ -164,8 +162,7 @@ def login(request: LoginRequest):
     token = create_access_token({"email": request.email})
     return {"access_token": token, "token_type": "bearer"}
 
-
-# Dependency for other routes
+# ---------------- Current User ----------------
 def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
