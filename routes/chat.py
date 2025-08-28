@@ -1,10 +1,11 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+# routes/chat_ws.py
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from pymongo import MongoClient
 import asyncio
 import redis.asyncio as aioredis
 import os
 from dotenv import load_dotenv
-from routes.auth import get_current_user
+from routes.auth import verify_token  # JWT verification helper
 
 load_dotenv()
 router = APIRouter()
@@ -25,17 +26,27 @@ async def get_redis():
         redis_conn_instance = await aioredis.from_url(REDIS_URI)
     return redis_conn_instance
 
-# ---------------- Connected Clients ----------------
-connected_clients = {}
+# ---------------- Connected clients ----------------
+connected_clients = {}  # chat_id -> { user_email: websocket }
 
-# ---------------- WebSocket Endpoint ----------------
-@router.websocket("/ws/{chat_id}/{user_id}/{property_id}/{owner_id}")
-async def websocket_endpoint(websocket: WebSocket, chat_id: str, user_id: str, property_id: str, owner_id: str):
+# ---------------- WebSocket endpoint ----------------
+@router.websocket("/ws/{chat_id}/{property_id}")
+async def websocket_endpoint(websocket: WebSocket, chat_id: str, property_id: str, token: str):
+    # Authenticate user
+    try:
+        current_user = verify_token(token)
+        user_email = current_user["email"]
+        full_name = current_user.get("fullName", "")
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
 
+    # Register client
     if chat_id not in connected_clients:
         connected_clients[chat_id] = {}
-    connected_clients[chat_id][user_id] = websocket
+    connected_clients[chat_id][user_email] = websocket
 
     # Send previous messages
     chat_doc = chats_collection.find_one({"chat_id": chat_id})
@@ -43,6 +54,7 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str, user_id: str, p
         for msg in chat_doc.get("messages", []):
             await websocket.send_text(f"{msg['sender']}: {msg['text']}")
 
+    # Redis pub/sub
     redis_conn = await get_redis()
     pubsub = redis_conn.pubsub()
     await pubsub.subscribe(chat_id)
@@ -61,43 +73,43 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str, user_id: str, p
         while True:
             data = await websocket.receive_text()
 
-            # Save message in MongoDB with unread flag
+            # Save message in MongoDB
             chats_collection.update_one(
                 {"chat_id": chat_id},
                 {
-                    "$set": {"property_id": property_id, "property_owner": owner_id},
+                    "$set": {"property_id": property_id},
                     "$push": {
                         "messages": {
-                            "sender": user_id,
+                            "sender": user_email,
                             "text": data,
                             "read": False
                         }
-                    },
+                    }
                 },
                 upsert=True
             )
 
             # Publish to Redis
-            await redis_conn.publish(chat_id, f"{user_id}: {data}")
+            await redis_conn.publish(chat_id, f"{user_email}: {data}")
 
             # Send to local clients
             for uid, client_ws in connected_clients.get(chat_id, {}).items():
-                if uid != user_id:
-                    await client_ws.send_text(f"{user_id}: {data}")
+                if uid != user_email:
+                    await client_ws.send_text(f"{user_email}: {data}")
 
     except WebSocketDisconnect:
-        print(f"User {user_id} disconnected from chat {chat_id}")
+        print(f"{user_email} disconnected from chat {chat_id}")
     finally:
         listener_task.cancel()
-        if chat_id in connected_clients and user_id in connected_clients[chat_id]:
-            del connected_clients[chat_id][user_id]
+        if chat_id in connected_clients and user_email in connected_clients[chat_id]:
+            del connected_clients[chat_id][user_email]
         if chat_id in connected_clients and not connected_clients[chat_id]:
             del connected_clients[chat_id]
         await pubsub.unsubscribe(chat_id)
 
 # ---------------- Notifications (for owner) ----------------
 @router.get("/notifications")
-def get_unread_chats(current_user: dict = Depends(get_current_user)):
+def get_unread_chats(current_user: dict = Depends(verify_token)):
     owner_id = current_user["email"]
     chats = chats_collection.find(
         {"property_owner": owner_id, "messages.read": False},
@@ -105,7 +117,7 @@ def get_unread_chats(current_user: dict = Depends(get_current_user)):
     )
     result = []
     for chat in chats:
-        unread_count = sum(1 for m in chat.get("messages", []) if not m.get("read", True))
+        unread_count = sum(1 for m in chat.get("messages", []) if not m.get("read", True) and m.get("sender") != owner_id)
         if unread_count > 0:
             result.append({
                 "chat_id": chat["chat_id"],
@@ -116,7 +128,7 @@ def get_unread_chats(current_user: dict = Depends(get_current_user)):
 
 # ---------------- Mark messages as read ----------------
 @router.post("/mark-read/{chat_id}")
-def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
+def mark_messages_as_read(chat_id: str, current_user: dict = Depends(verify_token)):
     owner_id = current_user["email"]
     chats_collection.update_one(
         {"chat_id": chat_id, "property_owner": owner_id},
