@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pymongo import MongoClient
-from routes.auth import get_current_user
+from routes.dependencies import get_current_user  # 👈 fix import
 import os
 
 router = APIRouter()

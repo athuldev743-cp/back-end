@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
 from pymongo import MongoClient
 import asyncio
 import redis.asyncio as aioredis
@@ -6,7 +6,9 @@ import os
 from dotenv import load_dotenv
 from jose import jwt, JWTError
 import json
+from datetime import datetime
 
+# ---------------- Setup ----------------
 load_dotenv()
 router = APIRouter()
 
@@ -93,7 +95,8 @@ async def websocket_endpoint(
             msg = {
                 "sender": user_email,
                 "text": data.get("text", ""),
-                "read": False
+                "read": False,
+                "timestamp": datetime.utcnow().timestamp()
             }
 
             # Save in MongoDB
@@ -122,12 +125,10 @@ async def websocket_endpoint(
         await pubsub.unsubscribe(chat_id)
 
 # ---------------- Inbox & Notifications ----------------
+from routes.auth import get_current_user
+
 @router.get("/inbox")
-def get_owner_inbox():
-    # Import here to avoid circular import
-    from routes.auth import get_current_user
-    from fastapi import Depends
-    current_user = Depends(get_current_user)()
+def get_owner_inbox(current_user: dict = Depends(get_current_user)):
     owner_email = current_user["email"]
 
     chats = list(chats_collection.find({"property_owner": owner_email}))
@@ -151,10 +152,7 @@ def get_owner_inbox():
     return {"inbox": inbox}
 
 @router.post("/mark-read/{chat_id}")
-def mark_messages_as_read(chat_id: str):
-    from routes.auth import get_current_user
-    from fastapi import Depends
-    current_user = Depends(get_current_user)()
+def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
     owner_email = current_user["email"]
 
     chats_collection.update_one(
