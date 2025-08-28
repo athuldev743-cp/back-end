@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
@@ -8,7 +8,9 @@ from database import db
 import os
 import random
 import smtplib
+from dotenv import load_dotenv
 
+load_dotenv()
 router = APIRouter()
 
 # ---------------- Security ----------------
@@ -68,33 +70,29 @@ def send_otp_email(to_email: str, otp: str):
         return False
 
 # ---------------- Routes ----------------
-
 @router.post("/register")
 def register(request: UserRegister):
     existing = db.users.find_one({"email": request.email})
 
+    otp = str(random.randint(100000, 999999))
+    expiry_time = datetime.utcnow() + timedelta(minutes=5)
+    hashed_pw = hash_password(request.password)
+
     if existing:
         if existing.get("is_verified"):
             raise HTTPException(status_code=400, detail="Email already registered")
-        else:
-            otp = str(random.randint(100000, 999999))
-            expiry_time = datetime.utcnow() + timedelta(minutes=5)
-            db.users.update_one(
-                {"email": request.email},
-                {"$set": {
-                    "otp": otp,
-                    "otp_expires": expiry_time,
-                    "password": hash_password(request.password),
-                    "fullName": request.fullName
-                }}
-            )
-            if not send_otp_email(request.email, otp):
-                raise HTTPException(status_code=500, detail="Failed to send OTP email")
-            return {"message": "Email already registered but not verified. New OTP sent."}
-
-    hashed_pw = hash_password(request.password)
-    otp = str(random.randint(100000, 999999))
-    expiry_time = datetime.utcnow() + timedelta(minutes=5)
+        db.users.update_one(
+            {"email": request.email},
+            {"$set": {
+                "otp": otp,
+                "otp_expires": expiry_time,
+                "password": hashed_pw,
+                "fullName": request.fullName
+            }}
+        )
+        if not send_otp_email(request.email, otp):
+            raise HTTPException(status_code=500, detail="Failed to send OTP email")
+        return {"message": "Email already registered but not verified. New OTP sent."}
 
     db.users.insert_one({
         "fullName": request.fullName,
@@ -163,6 +161,7 @@ def login(request: UserLogin):
 
 # ---------------- Current User ----------------
 def get_current_user(token: str = Depends(oauth2_scheme)):
+    """Decode JWT token and return the user dict"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("email")
@@ -175,7 +174,6 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-# ---------------- Get logged-in user info ----------------
 @router.get("/me")
 def get_me(current_user: dict = Depends(get_current_user)):
     return {"email": current_user["email"], "fullName": current_user["fullName"]}

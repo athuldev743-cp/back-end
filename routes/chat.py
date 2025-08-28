@@ -5,10 +5,11 @@ import asyncio
 import redis.asyncio as aioredis
 import os
 from dotenv import load_dotenv
-from routes.auth import get_current_user
+from routes.auth import SECRET_KEY, ALGORITHM
+from jose import jwt, JWTError
 import json
-from typing import Dict
 from fastapi import Depends
+
 
 load_dotenv()
 router = APIRouter()
@@ -32,6 +33,18 @@ async def get_redis():
 # ---------------- Connected clients ----------------
 connected_clients = {}  # chat_id -> { user_email: websocket }
 
+# ---------------- Auth helper ----------------
+def get_user_from_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("email")
+        if not email:
+            return None
+        user = db.users.find_one({"email": email})
+        return user
+    except JWTError:
+        return None
+
 # ---------------- WebSocket ----------------
 @router.websocket("/ws/{chat_id}/{property_id}")
 async def websocket_endpoint(
@@ -41,13 +54,12 @@ async def websocket_endpoint(
     token: str = Query(...)
 ):
     # Authenticate user
-    try:
-        current_user = get_current_user(token)
-        user_email = current_user["email"]
-        full_name = current_user.get("fullName", "")
-    except Exception:
+    user = get_user_from_token(token)
+    if not user:
         await websocket.close(code=1008)
         return
+
+    user_email = user["email"]
 
     await websocket.accept()
 
@@ -75,7 +87,6 @@ async def websocket_endpoint(
                 except json.JSONDecodeError:
                     continue
 
-                # Send to all clients except sender
                 for uid, client_ws in connected_clients.get(chat_id, {}).items():
                     if uid != msg_json.get("sender") and client_ws.application_state == WebSocket.STATE_CONNECTED:
                         await client_ws.send_json(msg_json)
@@ -84,7 +95,7 @@ async def websocket_endpoint(
 
     try:
         while True:
-            data = await websocket.receive_json()  # Expect JSON { text }
+            data = await websocket.receive_json()
             msg = {
                 "sender": user_email,
                 "text": data.get("text", ""),
@@ -118,7 +129,7 @@ async def websocket_endpoint(
 
 # ---------------- Notifications ----------------
 @router.get("/notifications")
-def get_unread_chats(current_user: dict = Depends(get_current_user)):
+def get_unread_chats(current_user: dict = Depends(lambda: get_user_from_token(Query(...)))):
     owner_id = current_user["email"]
     chats = chats_collection.find(
         {"property_owner": owner_id, "messages.read": False},
@@ -137,7 +148,7 @@ def get_unread_chats(current_user: dict = Depends(get_current_user)):
 
 # ---------------- Mark messages as read ----------------
 @router.post("/mark-read/{chat_id}")
-def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
+def mark_messages_as_read(chat_id: str, current_user: dict = Depends(lambda: get_user_from_token(Query(...)))):
     owner_id = current_user["email"]
     chats_collection.update_one(
         {"chat_id": chat_id, "property_owner": owner_id},
