@@ -1,4 +1,3 @@
-# routes/auth.py
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr
@@ -149,7 +148,7 @@ def verify_otp(request: UserVerifyOTP):
     )
 
     token = create_access_token({"email": request.email})
-    return {"message": "Email verified successfully.", "token": token, "fullName": user["fullName"]}
+    return {"access_token": token, "token_type": "bearer", "fullName": user["fullName"]}
 
 @router.post("/login")
 def login(request: UserLogin):
@@ -175,3 +174,8 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         return user
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+# ---------------- Get logged-in user info ----------------
+@router.get("/me")
+def get_me(current_user: dict = Depends(get_current_user)):
+    return {"email": current_user["email"], "fullName": current_user["fullName"]}

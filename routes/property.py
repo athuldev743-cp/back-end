@@ -4,6 +4,7 @@ import cloudinary.uploader
 from cloudinary_config import *  # Cloudinary config
 from routes.auth import get_current_user
 from bson import ObjectId
+from datetime import datetime
 
 router = APIRouter()
 
@@ -17,7 +18,7 @@ async def add_property(
     price: float = Form(...),
     location: str = Form(...),
     category: str = Form(...),
-    mobileNO: str = Form(...),  # ✅ mandatory mobile field added
+    mobileNO: str = Form(...),
     image: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
@@ -48,7 +49,9 @@ async def add_property(
             "category": category.lower(),
             "image_url": image_url,
             "owner": current_user["email"],
-            "mobileNO": mobileNO,  # ✅ set from form
+            "ownerFullName": current_user.get("fullName", ""),
+            "mobileNO": mobileNO,
+            "created_at": datetime.utcnow()
         }
 
         result = db.properties.insert_one(property_data)

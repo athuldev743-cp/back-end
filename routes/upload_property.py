@@ -1,16 +1,13 @@
 from fastapi import APIRouter, HTTPException, UploadFile, Form, Depends
-import requests
-import os
-from dotenv import load_dotenv
 from routes.auth import get_current_user
-
-load_dotenv()
-
-BACKEND_URL = os.getenv("BACKEND_URL")
-EMAIL = os.getenv("EMAIL")
-PASSWORD = os.getenv("PASSWORD")
+from database import db
+import cloudinary.uploader
+from cloudinary_config import *
+from datetime import datetime
 
 router = APIRouter()
+
+VALID_CATEGORIES = ["house", "villa", "apartment", "farmlands", "plots", "buildings"]
 
 @router.post("/upload-property")
 async def upload_property(
@@ -19,48 +16,47 @@ async def upload_property(
     price: float = Form(...),
     location: str = Form(...),
     category: str = Form(...),
+    mobileNO: str = Form(...),
     image: UploadFile = None,
     current_user: dict = Depends(get_current_user),
 ):
     try:
-        # Step 1: Log in to get JWT
-        login_response = requests.post(
-            f"{BACKEND_URL}/auth/login",
-            json={"email": EMAIL, "password": PASSWORD},
-        )
-        if login_response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Login failed")
-        
-        token = login_response.json().get("access_token")
-        if not token:
-            raise HTTPException(status_code=500, detail="Token not received")
+        if category.lower() not in VALID_CATEGORIES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid category. Must be one of {VALID_CATEGORIES}"
+            )
 
-        headers = {"Authorization": f"Bearer {token}"}
+        # Upload image if provided
+        image_url = None
+        if image:
+            try:
+                upload_result = cloudinary.uploader.upload(
+                    image.file,
+                    folder="real-estate-app",
+                    resource_type="auto"
+                )
+                image_url = upload_result.get("secure_url")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
 
-        # Step 2: Prepare property data
-        data = {
+        property_data = {
             "title": title,
             "description": description,
             "price": price,
             "location": location,
-            "category": category
+            "category": category.lower(),
+            "image_url": image_url,
+            "owner": current_user["email"],
+            "ownerFullName": current_user.get("fullName", ""),
+            "mobileNO": mobileNO,
+            "created_at": datetime.utcnow()
         }
 
-        files = {}
-        if image:
-            files = {"image": image.file}
+        result = db.properties.insert_one(property_data)
+        property_data["_id"] = str(result.inserted_id)
 
-        # Step 3: Send request to backend add-property
-        response = requests.post(
-            f"{BACKEND_URL}/api/add-property",
-            headers=headers,
-            data=data,
-            files=files
-        )
+        return {"message": "Property added successfully", "property": property_data}
 
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-
-        return response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

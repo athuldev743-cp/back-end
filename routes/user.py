@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from pymongo import MongoClient
+from routes.auth import get_current_user
 import os
 
 router = APIRouter()
@@ -9,10 +10,14 @@ client = MongoClient(MONGO_URI)
 db = client.real_estate
 chats_collection = db.chats
 
-# Fetch unread chat notifications for a user (owner)
-@router.get("/notifications/{owner_id}")
-def get_unread_chats(owner_id: str):
-    chats = chats_collection.find({"property_owner": owner_id, "messages.read": False})
+# ---------------- Unread chat notifications ----------------
+@router.get("/notifications")
+def get_unread_chats(current_user: dict = Depends(get_current_user)):
+    owner_id = current_user["email"]
+    chats = chats_collection.find(
+        {"property_owner": owner_id, "messages.read": False},
+        {"chat_id": 1, "property_id": 1, "messages": 1}
+    )
     result = []
     for chat in chats:
         unread_count = sum(1 for m in chat.get("messages", []) if not m.get("read", True))
@@ -24,11 +29,13 @@ def get_unread_chats(owner_id: str):
             })
     return {"notifications": result}
 
-# Mark chat messages as read
-@router.post("/mark-read/{chat_id}/{owner_id}")
-def mark_messages_as_read(chat_id: str, owner_id: str):
+# ---------------- Mark messages as read ----------------
+@router.post("/mark-read/{chat_id}")
+def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
+    owner_id = current_user["email"]
     chats_collection.update_one(
         {"chat_id": chat_id, "property_owner": owner_id},
-        {"$set": {"messages.$[].read": True}}
+        {"$set": {"messages.$[elem].read": True}},
+        array_filters=[{"elem.read": False, "elem.sender": {"$ne": owner_id}}]
     )
     return {"status": "ok"}
