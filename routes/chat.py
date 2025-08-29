@@ -11,13 +11,13 @@ load_dotenv()
 router = APIRouter()
 
 # ---------------- Database ----------------
-MONGO_URI = "your_mongo_uri_here"  # or os.getenv("MONGO_URI")
+MONGO_URI = "your_mongo_uri_here"  # replace with actual URI or use os.getenv
 client = MongoClient(MONGO_URI)
 db = client.real_estate
 chats_collection = db.chats
 
 # ---------------- Redis ----------------
-REDIS_URI = "your_redis_uri_here"  # or os.getenv("REDIS_URI")
+REDIS_URI = "your_redis_uri_here"  # replace with actual URI or use os.getenv
 redis_conn_instance = None
 
 async def get_redis():
@@ -115,7 +115,32 @@ async def websocket_endpoint(
         connected_clients.get(chat_id, {}).pop(user_email, None)
         await pubsub.unsubscribe(chat_id)
 
-# ---------------- REST chat send route ----------------
+# ---------------- REST: Get or create chat for a property ----------------
+@router.get("/property/{property_id}")
+async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_current_user)):
+    user_email = current_user["email"]
+
+    # Check if chat already exists for this property and user
+    chat_doc = chats_collection.find_one({
+        "property_id": property_id,
+        "participants": {"$in": [user_email]}
+    })
+
+    if not chat_doc:
+        # Create new chat
+        chat_id = f"{property_id}_{user_email}_{int(datetime.utcnow().timestamp())}"
+        chat_doc = {
+            "chat_id": chat_id,
+            "property_id": property_id,
+            "participants": [user_email],  # Owner can be added later
+            "messages": [],
+            "last_message": None
+        }
+        chats_collection.insert_one(chat_doc)
+
+    return {"chatId": chat_doc["chat_id"], "messages": chat_doc.get("messages", [])}
+
+# ---------------- REST: Send message ----------------
 @router.post("/{chat_id}/send")
 async def send_message_rest(
     chat_id: str,
