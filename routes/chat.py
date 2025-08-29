@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, Body
 from pymongo import MongoClient
 import asyncio
 import redis.asyncio as aioredis
@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from jose import jwt, JWTError
 import json
 from datetime import datetime
+from routes.auth import get_current_user
 
 # ---------------- Setup ----------------
 load_dotenv()
@@ -102,7 +103,7 @@ async def websocket_endpoint(
             # Save in MongoDB
             chats_collection.update_one(
                 {"chat_id": chat_id},
-                {"$set": {"property_id": property_id}, "$push": {"messages": msg}},
+                {"$set": {"property_id": property_id, "last_message": msg}, "$push": {"messages": msg}},
                 upsert=True
             )
 
@@ -124,9 +125,43 @@ async def websocket_endpoint(
             del connected_clients[chat_id]
         await pubsub.unsubscribe(chat_id)
 
-# ---------------- Inbox & Notifications ----------------
-from routes.auth import get_current_user
+# ---------------- REST chat send route ----------------
+@router.post("/chat/{chat_id}/send")
+async def send_message_rest(
+    chat_id: str,
+    text: str = Body(..., embed=True),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Send a chat message via REST and publish to Redis (WebSocket clients)
+    """
+    user_email = current_user["email"]
 
+    chat_doc = chats_collection.find_one({"chat_id": chat_id})
+    if not chat_doc:
+        return {"error": "Chat not found"}
+
+    msg = {
+        "sender": user_email,
+        "text": text,
+        "read": False,
+        "timestamp": datetime.utcnow().timestamp()
+    }
+
+    # Update MongoDB
+    chats_collection.update_one(
+        {"chat_id": chat_id},
+        {"$push": {"messages": msg}, "$set": {"last_message": msg}},
+        upsert=True
+    )
+
+    # Publish to Redis so WebSocket clients receive it
+    redis_conn = await get_redis()
+    await redis_conn.publish(chat_id, json.dumps(msg))
+
+    return {"status": "ok", "message": msg}
+
+# ---------------- Inbox & Notifications ----------------
 @router.get("/inbox")
 def get_owner_inbox(current_user: dict = Depends(get_current_user)):
     owner_email = current_user["email"]
@@ -135,7 +170,7 @@ def get_owner_inbox(current_user: dict = Depends(get_current_user)):
 
     inbox = []
     for chat in chats:
-        last_msg = chat["messages"][-1] if chat.get("messages") else None
+        last_msg = chat.get("last_message") or (chat["messages"][-1] if chat.get("messages") else None)
         unread_count = sum(
             1 for m in chat.get("messages", [])
             if not m.get("read", True) and m.get("sender") != owner_email
