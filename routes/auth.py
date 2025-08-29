@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
-from jose import jwt
+from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from database import db
 import os, random, smtplib
@@ -156,8 +156,20 @@ def login(request: UserLogin):
 
     token = create_access_token({"email": request.email})
     return {"access_token": token, "token_type": "bearer", "fullName": user["fullName"]}
+
+# ---------- FIXED /me ROUTE ----------
 @router.get("/me")
 def get_me(current_user: dict = Depends(get_current_user)):
-    if not current_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return current_user
+    try:
+        if not current_user:
+            raise HTTPException(status_code=404, detail="User not found")
+        # Only return safe fields
+        return {
+            "fullName": current_user.get("fullName"),
+            "email": current_user.get("email"),
+            "is_verified": current_user.get("is_verified", False),
+        }
+    except Exception as e:
+        # Log error for debugging
+        print("Error in /me route:", e)
+        raise HTTPException(status_code=500, detail="Internal server error")

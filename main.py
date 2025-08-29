@@ -4,21 +4,26 @@ from routes import auth, property, chat, user, chat_notifications
 
 app = FastAPI()
 
-# CORS setup
+# -------------------- CORS --------------------
+origins = [
+    "https://estateuro.onrender.com",  # your production frontend
+    "http://localhost:3000",           # local testing
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://estateuro.onrender.com"],  # your frontend domain
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Root route
+# -------------------- Root --------------------
 @app.get("/")
 def root():
     return {"message": "Backend running successfully 🚀"}
 
-# Include routers
+# -------------------- Routers --------------------
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(property.router, prefix="/api", tags=["property"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
