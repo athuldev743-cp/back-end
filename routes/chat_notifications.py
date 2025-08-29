@@ -6,22 +6,26 @@ import os
 
 router = APIRouter()
 
-MONGO_URI = "your_mongo_uri_here"  # or os.getenv("MONGO_URI")
+# MongoDB setup
+MONGO_URI = os.getenv("MONGO_URI") or "your_mongo_uri_here"
 client = MongoClient(MONGO_URI)
 db = client.real_estate
 chats_collection = db.chats
 
-# ---------------- Unread notifications ----------------
+# ---------------- GET unread notifications ----------------
 @router.get("/notifications")
 def get_unread_chats(current_user: dict = Depends(get_current_user)):
     owner_email = current_user.get("email")
     if not owner_email:
         raise HTTPException(status_code=400, detail="User email not found")
 
-    chats = chats_collection.find(
-        {"property_owner": owner_email, "messages": {"$elemMatch": {"read": False}}},
-        {"chat_id": 1, "property_id": 1, "messages": 1}
-    )
+    try:
+        chats = chats_collection.find(
+            {"property_owner": owner_email, "messages": {"$elemMatch": {"read": False}}},
+            {"chat_id": 1, "property_id": 1, "messages": 1}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     result = []
     for chat in chats:
@@ -35,7 +39,7 @@ def get_unread_chats(current_user: dict = Depends(get_current_user)):
 
     return {"notifications": result}
 
-# ---------------- Mark messages as read ----------------
+# ---------------- POST mark messages as read ----------------
 @router.post("/mark-read/{chat_id}")
 def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
     owner_email = current_user.get("email")
@@ -50,11 +54,14 @@ def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current
         "property_owner": owner_email
     }
 
-    result = chats_collection.update_one(
-        query,
-        {"$set": {"messages.$[elem].read": True}},
-        array_filters=[{"elem.read": False, "elem.sender": {"$ne": owner_email}}]
-    )
+    try:
+        result = chats_collection.update_one(
+            query,
+            {"$set": {"messages.$[elem].read": True}},
+            array_filters=[{"elem.read": False, "elem.sender": {"$ne": owner_email}}]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="No unread messages found")
