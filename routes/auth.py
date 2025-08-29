@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 from database import db
 import os, random, smtplib
 from dotenv import load_dotenv
-from routes.dependencies import get_current_user  # ✅ updated
+from routes.dependencies import get_current_user  
+from fastapi import Depends
 
 load_dotenv()
 router = APIRouter()
@@ -155,3 +156,8 @@ def login(request: UserLogin):
 
     token = create_access_token({"email": request.email})
     return {"access_token": token, "token_type": "bearer", "fullName": user["fullName"]}
+@router.get("/me")
+def get_me(current_user: dict = Depends(get_current_user)):
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return current_user

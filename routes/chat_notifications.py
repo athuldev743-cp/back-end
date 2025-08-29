@@ -1,3 +1,4 @@
+# routes/chat_notifications.py
 from fastapi import APIRouter, Depends, HTTPException
 from pymongo import MongoClient
 from bson import ObjectId
@@ -15,15 +16,18 @@ chats_collection = db.chats
 # ---------------- GET unread notifications ----------------
 @router.get("/notifications")
 def get_unread_chats(current_user: dict = Depends(get_current_user)):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
+
     owner_email = current_user.get("email")
     if not owner_email:
         raise HTTPException(status_code=400, detail="User email not found")
 
     try:
-        chats = chats_collection.find(
+        chats = list(chats_collection.find(
             {"property_owner": owner_email, "messages": {"$elemMatch": {"read": False}}},
             {"chat_id": 1, "property_id": 1, "messages": 1}
-        )
+        ))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
@@ -42,6 +46,9 @@ def get_unread_chats(current_user: dict = Depends(get_current_user)):
 # ---------------- POST mark messages as read ----------------
 @router.post("/mark-read/{chat_id}")
 def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
+
     owner_email = current_user.get("email")
     if not owner_email:
         raise HTTPException(status_code=400, detail="User email not found")
