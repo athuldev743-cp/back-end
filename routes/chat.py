@@ -11,9 +11,33 @@ router = APIRouter()
 properties_collection = db["properties"]
 chats_collection = db["chats"]
 
-# ---------------- Pydantic model for sending message ----------------
+# ---------------- Pydantic models ----------------
+class PropertyIn(BaseModel):
+    title: str
+    category: str
+    location: str
+    description: str = ""
+
 class MessageIn(BaseModel):
     text: str
+
+# ---------------- ADD PROPERTY ----------------
+@router.post("/add-property")
+async def add_property(data: PropertyIn, current_user: dict = Depends(get_current_user)):
+    owner_email = current_user["email"]
+
+    new_property = {
+        "title": data.title,
+        "category": data.category,
+        "location": data.location,
+        "description": data.description,
+        "owner_email": owner_email,
+        "created_at": datetime.utcnow()
+    }
+
+    result = properties_collection.insert_one(new_property)
+    new_property["_id"] = str(result.inserted_id)
+    return new_property
 
 # ---------------- GET OR CREATE CHAT ----------------
 @router.get("/property/{property_id}")
@@ -30,9 +54,19 @@ async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_
     if not property_doc:
         raise HTTPException(status_code=404, detail="Property not found")
 
+    # Ensure owner_email exists
     owner_email = property_doc.get("owner_email")
     if not owner_email:
-        raise HTTPException(status_code=400, detail="Property owner not set")
+        # If missing, fallback to current user as owner
+        owner_email = user_email
+        properties_collection.update_one(
+            {"_id": prop_oid},
+            {"$set": {"owner_email": owner_email}}
+        )
+
+    # Prevent user from chatting with self
+    if owner_email == user_email:
+        raise HTTPException(status_code=400, detail="Cannot chat with your own property")
 
     # Check if chat exists
     chat_doc = chats_collection.find_one({
