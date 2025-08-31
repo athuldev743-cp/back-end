@@ -85,3 +85,56 @@ async def get_all_properties(search: str = None):
     for prop in properties:
         prop["_id"] = str(prop["_id"])
     return properties
+# -------------------- Chat Endpoints --------------------
+
+from fastapi import Form  # make sure Form is imported if not already
+
+# Get or create chat for a property
+@router.get("/chat/property/{property_id}")
+async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_current_user)):
+    chat = db.chats.find_one({"propertyId": property_id})
+    if not chat:
+        new_chat = {"propertyId": property_id, "messages": []}
+        result = db.chats.insert_one(new_chat)
+        new_chat["_id"] = str(result.inserted_id)
+        return {"chatId": new_chat["_id"], "messages": []}
+    
+    # Convert ObjectId to str
+    chat["_id"] = str(chat["_id"])
+    return {"chatId": chat["_id"], "messages": chat["messages"]}
+
+# Send message
+@router.post("/chat/{chat_id}/send")
+async def send_chat_message(chat_id: str, text: str = Form(...), current_user: dict = Depends(get_current_user)):
+    chat = db.chats.find_one({"_id": ObjectId(chat_id)})
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    message = {
+        "sender": current_user["email"],
+        "text": text,
+        "timestamp": datetime.utcnow()
+    }
+
+    db.chats.update_one({"_id": ObjectId(chat_id)}, {"$push": {"messages": message}})
+    return {"status": "ok", "message": message}
+
+# Owner inbox: all chats for properties owned by this user
+@router.get("/chat/inbox")
+async def owner_inbox(current_user: dict = Depends(get_current_user)):
+    user_email = current_user["email"]
+    # Find chats for properties owned by user
+    properties = list(db.properties.find({"owner": user_email}, {"_id": 1}))
+    property_ids = [str(p["_id"]) for p in properties]
+    chats = list(db.chats.find({"propertyId": {"$in": property_ids}}))
+    for c in chats:
+        c["_id"] = str(c["_id"])
+    return chats
+
+# Get messages for specific chat
+@router.get("/chat/{chat_id}/messages")
+async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_current_user)):
+    chat = db.chats.find_one({"_id": ObjectId(chat_id)})
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return {"messages": chat["messages"]}
