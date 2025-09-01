@@ -6,7 +6,7 @@ app = FastAPI()
 
 # -------------------- CORS --------------------
 origins = [
-    "https://estateuro.onrender.com",  # your production frontend
+    " https://athuldev743-cp.github.io/real-estate-front/",  # your production frontend
     "http://localhost:3000",           # local testing
 ]
 
