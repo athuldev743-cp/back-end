@@ -6,7 +6,7 @@ app = FastAPI()
 
 # -------------------- CORS --------------------
 origins = [
-    "https://real-estate-front-6o4p5btyx-athul-devs-projects.vercel.app",  # your production frontend
+    "https://real-estate-front-two.vercel.app",  
     "http://localhost:3000",           # local testing
 ]
 
