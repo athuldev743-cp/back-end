@@ -10,24 +10,26 @@ from datetime import datetime
 router = APIRouter()
 
 VALID_CATEGORIES = ["house", "villa", "apartment", "farmlands", "plots", "buildings"]
-
 @router.post("/add-property")
 async def add_property(
     title: str = Form(...),
     description: str = Form(...),
     price: float = Form(...),
-    location: str = Form(...),
+    latitude: float = Form(...),          # <-- new
+    longitude: float = Form(...),         # <-- new
     category: str = Form(...),
     mobileNO: str = Form(...),
-    image: UploadFile = File(...),
+    images: list[UploadFile] = File(...), # <-- multiple images
     current_user: dict = Depends(get_current_user),
 ):
     if category.lower() not in VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of {VALID_CATEGORIES}")
 
+    image_urls = []
     try:
-        upload_result = cloudinary.uploader.upload(image.file, folder="real-estate-app", resource_type="auto")
-        image_url = upload_result.get("secure_url")
+        for img in images:
+            upload_result = cloudinary.uploader.upload(img.file, folder="real-estate-app", resource_type="auto")
+            image_urls.append(upload_result.get("secure_url"))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cloudinary upload failed: {str(e)}")
 
@@ -35,9 +37,10 @@ async def add_property(
         "title": title,
         "description": description,
         "price": price,
-        "location": location,
+        "latitude": latitude,             # store coordinates
+        "longitude": longitude,
         "category": category.lower(),
-        "image_url": image_url,
+        "images": image_urls,             # store as list of URLs
         "owner": current_user["email"],
         "ownerFullName": current_user.get("fullName", ""),
         "mobileNO": mobileNO,
@@ -47,6 +50,7 @@ async def add_property(
     result = db.properties.insert_one(property_data)
     property_data["_id"] = str(result.inserted_id)
     return {"message": "Property added successfully", "property": property_data}
+
 
 @router.get("/my-properties")
 async def get_my_properties(current_user: dict = Depends(get_current_user)):
