@@ -1,22 +1,32 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from routes import auth, property, chat, user, chat_notifications
 from routes.location import router as location_router
+
 app = FastAPI()
 
 # -------------------- CORS --------------------
 origins = [
     "https://real-estate-front-two.vercel.app",  
-    "http://localhost:3000",           # local testing
+    "http://localhost:3000",   # local dev
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=origins,         # exact origins
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],           # allow all methods (GET, POST, etc.)
+    allow_headers=["*"],           # allow all headers
+    expose_headers=["*"],          # ensures headers like Authorization work
 )
+
+# Debug middleware to check incoming origin
+@app.middleware("http")
+async def log_request(request: Request, call_next):
+    origin = request.headers.get("origin")
+    print("🌍 Incoming request from Origin:", origin)
+    response = await call_next(request)
+    return response
 
 # -------------------- Root --------------------
 @app.get("/")
