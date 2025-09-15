@@ -6,18 +6,17 @@ from routes.location import router as location_router
 app = FastAPI()
 
 # -------------------- CORS --------------------
-origins = [
-    "https://real-estate-front-two.vercel.app",  
-    "http://localhost:3000",   # local dev
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,         # exact origins
+    allow_origins=[
+        "https://real-estate-front-two.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],           # allow all methods (GET, POST, etc.)
-    allow_headers=["*"],           # allow all headers
-    expose_headers=["*"],          # ensures headers like Authorization work
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Debug middleware to check incoming origin
