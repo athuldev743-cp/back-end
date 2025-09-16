@@ -8,6 +8,7 @@ from bson import ObjectId
 from datetime import datetime
 from fastapi import status
 
+
 router = APIRouter()
 
 VALID_CATEGORIES = ["house", "villa", "apartment", "farmlands", "plots", "buildings"]
