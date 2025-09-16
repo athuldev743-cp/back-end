@@ -6,6 +6,7 @@ from cloudinary_config import *
 from routes.dependencies import get_current_user  # ✅ updated
 from bson import ObjectId
 from datetime import datetime
+from fastapi import status
 
 router = APIRouter()
 
@@ -142,3 +143,26 @@ async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_curre
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     return {"messages": chat["messages"]}
+#delete property
+
+@router.delete("/property/{property_id}")
+async def delete_property(
+    property_id: str, 
+    current_user: dict = Depends(get_current_user)
+):
+    # Find property
+    prop = db.properties.find_one({"_id": ObjectId(property_id)})
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    # Ensure only the owner can delete
+    if prop["owner"] != current_user["email"]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this property")
+
+    # Delete property
+    db.properties.delete_one({"_id": ObjectId(property_id)})
+
+    # Optional: also delete related chat
+    db.chats.delete_many({"propertyId": property_id})
+
+    return {"message": "Property deleted successfully"}
