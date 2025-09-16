@@ -143,8 +143,53 @@ async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_curre
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     return {"messages": chat["messages"]}
-#delete property
+from fastapi import Form, UploadFile, File
 
+@router.put("/property/{property_id}")
+async def update_property(
+    property_id: str,
+    title: str = Form(...),
+    description: str = Form(...),
+    price: float = Form(...),
+    latitude: float = Form(...),
+    longitude: float = Form(...),
+    category: str = Form(...),
+    mobileNO: str = Form(...),
+    images: list[UploadFile] = File(default=[]),
+    existingImages: str = Form("[]"),
+    current_user: dict = Depends(get_current_user),
+):
+    prop = db.properties.find_one({"_id": ObjectId(property_id)})
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    if prop["owner"] != current_user["email"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    import json
+    existing_images_list = json.loads(existingImages)
+
+    # Upload new images to Cloudinary
+    image_urls = []
+    for img in images:
+        upload_result = cloudinary.uploader.upload(img.file, folder="real-estate-app", resource_type="auto")
+        image_urls.append(upload_result.get("secure_url"))
+
+    updated_data = {
+        "title": title,
+        "description": description,
+        "price": price,
+        "latitude": latitude,
+        "longitude": longitude,
+        "category": category.lower(),
+        "mobileNO": mobileNO,
+        "images": existing_images_list + image_urls,
+    }
+
+    db.properties.update_one({"_id": ObjectId(property_id)}, {"$set": updated_data})
+    return {"message": "Property updated successfully"}
+
+
+      #delete property
 @router.delete("/property/{property_id}")
 async def delete_property(
     property_id: str, 
