@@ -5,11 +5,13 @@ import os
 
 router = APIRouter()
 
+# -------------------- MongoDB Setup --------------------
 MONGO_URI = os.getenv("MONGO_URI", "your_mongo_uri_here")
 client = AsyncIOMotorClient(MONGO_URI)
 db = client.real_estate
 chats_collection = db.chats
 
+# -------------------- Get Unread Notifications --------------------
 @router.get("/notifications")
 async def get_unread_chats(current_user=Depends(get_current_user)):
     user_email = current_user.get("email")
@@ -40,6 +42,7 @@ async def get_unread_chats(current_user=Depends(get_current_user)):
 
     return {"notifications": result}
 
+# -------------------- Mark Messages as Read --------------------
 @router.post("/mark-read/{chat_id}")
 async def mark_messages_as_read(chat_id: str, current_user=Depends(get_current_user)):
     user_email = current_user.get("email")
