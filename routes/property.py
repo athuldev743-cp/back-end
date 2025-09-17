@@ -57,10 +57,12 @@ async def add_property(
 @router.get("/my-properties")
 async def get_my_properties(current_user: dict = Depends(get_current_user)):
     user_email = current_user["email"]
-    properties = list(db.properties.find({"owner": user_email}))
+    properties = await db.properties.find({"owner": user_email}).to_list(100)
+    
+    # Convert _id to str for frontend
     for prop in properties:
         prop["_id"] = str(prop["_id"])
-    return properties
+    return {"properties": properties}
 
 @router.get("/category/{category}")
 async def get_properties_by_category(category: str, search: str = None):

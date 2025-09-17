@@ -252,8 +252,7 @@ def logout(current_user: dict = Depends(get_current_user)):
     return {"message": "Logged out successfully"}
 
 @router.get("/me")
-def get_me(current_user: dict = Depends(get_current_user)):
+async def get_me(current_user: dict = Depends(get_current_user)):
     if not current_user:
         raise HTTPException(status_code=404, detail="User not found")
-    # Always return the latest safe fields (no tokens)
     return format_user_response(current_user)
