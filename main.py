@@ -1,31 +1,47 @@
+# main.py (or your backend entry point)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from routes import auth, property, chat, user, chat_notifications
 from routes.location import router as location_router
 from routes.cart import cart_router
+import logging
+
 app = FastAPI()
 
+# -------------------- Logging --------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # -------------------- CORS --------------------
+origins = [
+    "https://real-estate-front-two.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://real-estate-front-two.vercel.app",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
+    expose_headers=["*"],  # allow frontend to read headers if needed
 )
 
-# Debug middleware to check incoming origin
+# -------------------- Debug middleware --------------------
 @app.middleware("http")
 async def log_request(request: Request, call_next):
     origin = request.headers.get("origin")
-    print("🌍 Incoming request from Origin:", origin)
-    response = await call_next(request)
-    return response
+    logger.info(f"🌍 Incoming request from Origin: {origin} {request.method} {request.url}")
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as e:
+        logger.exception(f"❌ Error processing request: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error. Check backend logs."}
+        )
 
 # -------------------- Root --------------------
 @app.get("/")
