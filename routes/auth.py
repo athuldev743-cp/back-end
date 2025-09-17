@@ -194,19 +194,24 @@ def verify_otp(request: UserVerifyOTP):
 
 @router.post("/login")
 def login(request: UserLogin):
-    user = db.users.find_one({"email": request.email})
-    if not user or not verify_password(request.password, user["password"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    if not user.get("is_verified", False):
-        raise HTTPException(status_code=403, detail="Email not verified")
+    try:
+        user = db.users.find_one({"email": request.email})
+        if not user or not verify_password(request.password, user["password"]):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        if not user.get("is_verified", False):
+            raise HTTPException(status_code=403, detail="Email not verified")
 
-    access_token = create_access_token_for_user(request.email)
-    refresh_token = create_refresh_token_for_user(request.email)
+        access_token = create_access_token_for_user(request.email)
+        refresh_token = create_refresh_token_for_user(request.email)
 
-    # Rotate refresh token (replace stored token)
-    db.users.update_one({"email": request.email}, {"$set": {"refresh_token": refresh_token}})
+        db.users.update_one({"email": request.email}, {"$set": {"refresh_token": refresh_token}})
 
-    return format_user_response(user, access_token=access_token, refresh_token=refresh_token)
+        return format_user_response(user, access_token=access_token, refresh_token=refresh_token)
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Server error")
+
 
 @router.post("/refresh-token")
 def refresh_token(req: RefreshTokenRequest):

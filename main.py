@@ -1,4 +1,4 @@
-# main.py (or your backend entry point)
+# main.py
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from routes import auth, property, chat, user, chat_notifications
@@ -7,9 +7,7 @@ from routes.cart import cart_router
 import logging
 from fastapi.responses import JSONResponse
 
-
-
-app = FastAPI()
+app = FastAPI(title="Estateuro API", version="1.0.0")
 
 # -------------------- Logging --------------------
 logging.basicConfig(level=logging.INFO)

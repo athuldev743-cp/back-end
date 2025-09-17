@@ -10,7 +10,7 @@ load_dotenv()
 SECRET_KEY = os.getenv("JWT_SECRET", "supersecret")
 ALGORITHM = "HS256"
 
-async def get_current_user(authorization: str | None = Header(None)):
+def get_current_user(authorization: str = Header(...)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     try:
@@ -25,7 +25,7 @@ async def get_current_user(authorization: str | None = Header(None)):
         email = payload.get("email")
         if not email:
             raise HTTPException(status_code=401, detail="Invalid token payload")
-        user = await db.users.find_one({"email": email})
+        user = db.users.find_one({"email": email})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         return user
