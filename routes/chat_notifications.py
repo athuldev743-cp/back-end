@@ -1,3 +1,4 @@
+# chat_notifications.py
 from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorClient
 from routes.dependencies import get_current_user
@@ -5,18 +6,17 @@ import os
 
 router = APIRouter()
 
-# -------------------- MongoDB Setup --------------------
 MONGO_URI = os.getenv("MONGO_URI", "your_mongo_uri_here")
 client = AsyncIOMotorClient(MONGO_URI)
 db = client.real_estate
 chats_collection = db.chats
 
-# -------------------- Get Unread Notifications --------------------
 @router.get("/notifications")
 async def get_unread_chats(current_user=Depends(get_current_user)):
-    user_email = current_user.get("email")
-    if not user_email:
-        raise HTTPException(status_code=400, detail="User email not found")
+    try:
+        user_email = current_user.get("email")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     cursor = chats_collection.find(
         {
@@ -42,12 +42,12 @@ async def get_unread_chats(current_user=Depends(get_current_user)):
 
     return {"notifications": result}
 
-# -------------------- Mark Messages as Read --------------------
 @router.post("/mark-read/{chat_id}")
 async def mark_messages_as_read(chat_id: str, current_user=Depends(get_current_user)):
-    user_email = current_user.get("email")
-    if not user_email:
-        raise HTTPException(status_code=400, detail="User email not found")
+    try:
+        user_email = current_user.get("email")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     query = {"chat_id": chat_id, "participants": user_email}
 

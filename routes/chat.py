@@ -1,3 +1,4 @@
+# chat.py
 from typing import List, Dict
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -8,14 +9,13 @@ from bson import ObjectId
 
 router = APIRouter()
 
-# -------------------- MongoDB Setup --------------------
 MONGO_URI = os.getenv("MONGO_URI", "your_mongo_uri_here")
 client = AsyncIOMotorClient(MONGO_URI)
 db = client.real_estate
+
 chats_collection = db.chats
 properties_collection = db.properties
 
-# -------------------- WebSocket Manager --------------------
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = {}
@@ -27,7 +27,7 @@ class ConnectionManager:
         self.active_connections[chat_id].append(websocket)
 
     def disconnect(self, chat_id: str, websocket: WebSocket):
-        if chat_id in self.active_connections:
+        if chat_id in self.active_connections and websocket in self.active_connections[chat_id]:
             self.active_connections[chat_id].remove(websocket)
             if not self.active_connections[chat_id]:
                 del self.active_connections[chat_id]
@@ -39,12 +39,34 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# -------------------- REST Endpoints --------------------
+# REST API: add property
+@router.post("/add-property")
+async def add_property(data: dict, current_user=Depends(get_current_user)):
+    try:
+        owner_email = current_user["email"]
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
+    new_property = {
+        "title": data.get("title", ""),
+        "category": data.get("category", ""),
+        "location": data.get("location", ""),
+        "description": data.get("description", ""),
+        "owner_email": owner_email,
+        "created_at": datetime.utcnow()
+    }
+    result = await properties_collection.insert_one(new_property)
+    new_property["_id"] = str(result.inserted_id)
+    return new_property
+
+# REST API: get or create chat
 @router.get("/property/{property_id}")
 async def get_or_create_chat(property_id: str, current_user=Depends(get_current_user)):
-    user_email = current_user["email"]
-    
+    try:
+        user_email = current_user["email"]
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
     try:
         prop_oid = ObjectId(property_id)
     except Exception:
@@ -77,12 +99,15 @@ async def get_or_create_chat(property_id: str, current_user=Depends(get_current_
 
     return {"chatId": chat_doc["chat_id"], "messages": chat_doc.get("messages", [])}
 
-# -------------------- WebSocket Endpoint --------------------
+# WebSocket endpoint
 @router.websocket("/ws/{chat_id}")
 async def websocket_endpoint(websocket: WebSocket, chat_id: str, current_user=Depends(get_current_user)):
-    user_email = current_user["email"]
+    try:
+        user_email = current_user["email"]
+    except Exception:
+        await websocket.close(code=1008)
+        return
 
-    # Validate chat
     chat_doc = await chats_collection.find_one({"chat_id": chat_id})
     if not chat_doc or user_email not in chat_doc["participants"]:
         await websocket.close(code=1008)
@@ -103,13 +128,13 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str, current_user=De
                 "read": False
             }
 
-            # Save to DB
             await chats_collection.update_one(
                 {"chat_id": chat_id},
                 {"$push": {"messages": new_message}, "$set": {"last_message": new_message}}
             )
 
-            # Broadcast to all connected clients
             await manager.broadcast(chat_id, {"new_message": new_message})
     except WebSocketDisconnect:
+        manager.disconnect(chat_id, websocket)
+    except Exception:
         manager.disconnect(chat_id, websocket)
