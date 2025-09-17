@@ -150,28 +150,58 @@ def delete_property(property_id: str, current_user: dict = Depends(get_current_u
     db.properties.delete_one({"_id": ObjectId(property_id)})
     db.chats.delete_many({"propertyId": property_id})
     return {"message": "Property deleted successfully"}
+from fastapi import APIRouter, HTTPException, Depends, Form
+from database import db
+from bson import ObjectId
+from datetime import datetime
+from routes.dependencies import get_current_user
 
-# ---------------- Chat Endpoints ----------------
+router = APIRouter()
+
+# -------------------- Chat Endpoints --------------------
 
 # Get or create chat for a property
 @router.get("/chat/property/{property_id}")
-def get_or_create_chat(property_id: str, current_user: dict = Depends(get_current_user)):
-    chat = db.chats.find_one({"propertyId": property_id})
+async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_current_user)):
+    # Check if property exists
+    try:
+        prop = db.properties.find_one({"_id": ObjectId(property_id)})
+        if not prop:
+            raise HTTPException(status_code=404, detail="Property not found")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid property ID")
+
+    # Convert property_id to string for consistency
+    property_id_str = str(property_id)
+    chat = db.chats.find_one({"propertyId": property_id_str})
     if not chat:
-        new_chat = {"propertyId": property_id, "messages": []}
+        new_chat = {"propertyId": property_id_str, "messages": []}
         result = db.chats.insert_one(new_chat)
         new_chat["_id"] = str(result.inserted_id)
         return {"chatId": new_chat["_id"], "messages": []}
 
+    # Convert ObjectId to string
     chat["_id"] = str(chat["_id"])
     return {"chatId": chat["_id"], "messages": chat["messages"]}
 
+
 # Send message
 @router.post("/chat/{chat_id}/send")
-def send_chat_message(chat_id: str, text: str = Form(...), current_user: dict = Depends(get_current_user)):
-    chat = db.chats.find_one({"_id": ObjectId(chat_id)})
-    if not chat:
-        raise HTTPException(status_code=404, detail="Chat not found")
+async def send_chat_message(
+    chat_id: str,
+    text: str = Form(...),
+    current_user: dict = Depends(get_current_user)
+):
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Message text is required")
+
+    # Check if chat exists
+    try:
+        chat = db.chats.find_one({"_id": ObjectId(chat_id)})
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid chat ID")
 
     message = {
         "sender": current_user["email"],
@@ -182,21 +212,30 @@ def send_chat_message(chat_id: str, text: str = Form(...), current_user: dict = 
     db.chats.update_one({"_id": ObjectId(chat_id)}, {"$push": {"messages": message}})
     return {"status": "ok", "message": message}
 
+
 # Owner inbox: all chats for properties owned by this user
 @router.get("/chat/inbox")
-def owner_inbox(current_user: dict = Depends(get_current_user)):
+async def owner_inbox(current_user: dict = Depends(get_current_user)):
     user_email = current_user["email"]
+    # Find properties owned by user
     properties = list(db.properties.find({"owner": user_email}, {"_id": 1}))
     property_ids = [str(p["_id"]) for p in properties]
+
+    # Find chats for these properties
     chats = list(db.chats.find({"propertyId": {"$in": property_ids}}))
     for c in chats:
         c["_id"] = str(c["_id"])
-    return chats
+    return {"chats": chats}
 
-# Get messages for specific chat
+
+# Get messages for a specific chat
 @router.get("/chat/{chat_id}/messages")
-def get_chat_messages(chat_id: str, current_user: dict = Depends(get_current_user)):
-    chat = db.chats.find_one({"_id": ObjectId(chat_id)})
-    if not chat:
-        raise HTTPException(status_code=404, detail="Chat not found")
+async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_current_user)):
+    try:
+        chat = db.chats.find_one({"_id": ObjectId(chat_id)})
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid chat ID")
+
     return {"messages": chat["messages"]}
