@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from bson import ObjectId
 
-router = APIRouter(
+router = APIRouter()
 
 MONGO_URI = os.getenv("MONGO_URI", "your_mongo_uri_here")
 client = AsyncIOMotorClient(MONGO_URI)
