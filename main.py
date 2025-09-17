@@ -9,7 +9,7 @@ load_dotenv()
 
 # Import your routers
 from routes import auth  # auth.py
-from routes import properties  # properties.py
+from routes import property
 from routes import chat  # chat.py
 # Add other routers here if needed
 
@@ -35,7 +35,7 @@ app.add_middleware(
 
 # ----- Include Routers -----
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
-app.include_router(properties.router, prefix="/api", tags=["Properties"])
+app.include_router(property.router, prefix="/api", tags=["Properties"])
 app.include_router(chat.router, prefix="/chat", tags=["Chat"])
 # Add any additional routers similarly
 
