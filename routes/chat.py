@@ -1,55 +1,54 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Dict
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
+from motor.motor_asyncio import AsyncIOMotorClient
+from routes.dependencies import get_current_user
+import os
 from datetime import datetime
 from bson import ObjectId
-from pydantic import BaseModel, Field
-from typing import List, Optional
-from routes.auth import get_current_user
-from database import db  # Ensure db is a Motor async client!!
 
 router = APIRouter()
 
-# Collections
-properties_collection = db["properties"]
-chats_collection = db["chats"]
+MONGO_URI = os.getenv("MONGO_URI", "your_mongo_uri_here")
+client = AsyncIOMotorClient(MONGO_URI)
+db = client.real_estate
 
-# ---------------- Pydantic models ----------------
-class PropertyIn(BaseModel):
-    title: str
-    category: str
-    location: str
-    description: str = ""
+chats_collection = db.chats
+properties_collection = db.properties
 
-class MessageIn(BaseModel):
-    text: str
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
 
-class MessageOut(BaseModel):
-    sender: str
-    text: str
-    timestamp: datetime
-    read: bool
+    async def connect(self, chat_id: str, websocket: WebSocket):
+        await websocket.accept()
+        if chat_id not in self.active_connections:
+            self.active_connections[chat_id] = []
+        self.active_connections[chat_id].append(websocket)
 
-class ChatOut(BaseModel):
-    chatId: str
-    messages: List[MessageOut]
+    def disconnect(self, chat_id: str, websocket: WebSocket):
+        self.active_connections[chat_id].remove(websocket)
+        if not self.active_connections[chat_id]:
+            del self.active_connections[chat_id]
 
-class PropertyOut(BaseModel):
-    _id: str = Field(alias="id")
-    title: str
-    category: str
-    location: str
-    description: str
-    owner_email: str
-    created_at: datetime
+    async def send_personal_message(self, message: dict, websocket: WebSocket):
+        await websocket.send_json(message)
 
-# ---------------- ADD PROPERTY ----------------
-@router.post("/add-property", response_model=PropertyOut)
-async def add_property(data: PropertyIn, current_user: dict = Depends(get_current_user)):
+    async def broadcast(self, chat_id: str, message: dict):
+        if chat_id in self.active_connections:
+            for connection in self.active_connections[chat_id]:
+                await connection.send_json(message)
+
+manager = ConnectionManager()
+
+# REST API: add property (same as previous)
+@router.post("/add-property")
+async def add_property(data: dict, current_user=Depends(get_current_user)):
     owner_email = current_user["email"]
     new_property = {
-        "title": data.title,
-        "category": data.category,
-        "location": data.location,
-        "description": data.description,
+        "title": data["title"],
+        "category": data["category"],
+        "location": data["location"],
+        "description": data.get("description", ""),
         "owner_email": owner_email,
         "created_at": datetime.utcnow()
     }
@@ -57,12 +56,10 @@ async def add_property(data: PropertyIn, current_user: dict = Depends(get_curren
     new_property["_id"] = str(result.inserted_id)
     return new_property
 
-# ---------------- GET OR CREATE CHAT ----------------
-@router.get("/property/{property_id}", response_model=ChatOut)
-async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_current_user)):
+# REST API: get or create chat (same logic as before)
+@router.get("/property/{property_id}")
+async def get_or_create_chat(property_id: str, current_user=Depends(get_current_user)):
     user_email = current_user["email"]
-
-    # Convert property_id to ObjectId
     try:
         prop_oid = ObjectId(property_id)
     except Exception:
@@ -72,29 +69,20 @@ async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_
     if not property_doc:
         raise HTTPException(status_code=404, detail="Property not found")
 
-    owner_email = property_doc.get("owner_email")
-    if not owner_email:
-        owner_email = user_email
-        await properties_collection.update_one(
-            {"_id": prop_oid},
-            {"$set": {"owner_email": owner_email}}
-        )
-
+    owner_email = property_doc.get("owner_email", user_email)
     if owner_email == user_email:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot chat with your own property")
+        raise HTTPException(status_code=400, detail="Cannot chat with your own property")
 
-    # Check if chat exists
     chat_doc = await chats_collection.find_one({
-        "property_id": str(property_id),
+        "property_id": property_id,
         "participants": {"$all": [user_email, owner_email]}
     })
 
-    # If not, create new chat
     if not chat_doc:
         chat_id = f"{property_id}_{user_email}_{int(datetime.utcnow().timestamp())}"
         chat_doc = {
             "chat_id": chat_id,
-            "property_id": str(property_id),
+            "property_id": property_id,
             "participants": [user_email, owner_email],
             "property_owner": owner_email,
             "messages": [],
@@ -102,65 +90,40 @@ async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_
         }
         await chats_collection.insert_one(chat_doc)
 
-    chat_doc = await chats_collection.find_one({"chat_id": chat_doc["chat_id"]})
+    return {"chatId": chat_doc["chat_id"], "messages": chat_doc.get("messages", [])}
 
-    # Format messages for output
-    messages = chat_doc.get("messages", []) or []
-    return {"chatId": chat_doc["chat_id"], "messages": messages}
-
-# ---------------- SEND MESSAGE ----------------
-@router.post("/chat/{chat_id}/send")
-async def send_message(chat_id: str, message: MessageIn, current_user: dict = Depends(get_current_user)):
+# WebSocket endpoint for real-time chat
+@router.websocket("/ws/{chat_id}")
+async def websocket_endpoint(websocket: WebSocket, chat_id: str, current_user=Depends(get_current_user)):
     user_email = current_user["email"]
+
+    # Validate chat existence and participation
     chat_doc = await chats_collection.find_one({"chat_id": chat_id})
-    if not chat_doc:
-        raise HTTPException(status_code=404, detail="Chat not found")
+    if not chat_doc or user_email not in chat_doc["participants"]:
+        await websocket.close(code=1008)  # Policy Violation
+        return
 
-    new_message = {
-        "sender": user_email,
-        "text": message.text,
-        "timestamp": datetime.utcnow(),
-        "read": False
-    }
+    await manager.connect(chat_id, websocket)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            message_text = data.get("text")
+            if not message_text:
+                continue
 
-    await chats_collection.update_one(
-        {"chat_id": chat_id},
-        {"$push": {"messages": new_message}, "$set": {"last_message": new_message}}
-    )
+            new_message = {
+                "sender": user_email,
+                "text": message_text,
+                "timestamp": datetime.utcnow(),
+                "read": False
+            }
+            # Update DB message list and last_message atomically
+            await chats_collection.update_one(
+                {"chat_id": chat_id},
+                {"$push": {"messages": new_message}, "$set": {"last_message": new_message}}
+            )
 
-    return {"status": "Message sent"}
-
-# ---------------- OWNER INBOX ----------------
-@router.get("/inbox")
-async def get_inbox(current_user: dict = Depends(get_current_user)):
-    user_email = current_user["email"]
-    chats = await chats_collection.find({"participants": user_email}, {"_id": 0}).to_list(100)
-    return {"chats": chats}
-
-# ---------------- GET CHAT MESSAGES ----------------
-@router.get("/chat/{chat_id}/messages")
-async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_current_user)):
-    chat_doc = await chats_collection.find_one({"chat_id": chat_id})
-    if not chat_doc:
-        raise HTTPException(status_code=404, detail="Chat not found")
-    return {"messages": chat_doc.get("messages", [])}
-
-# ---------------- MARK MESSAGES AS READ ----------------
-@router.post("/chat/mark-read/{chat_id}")
-async def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
-    user_email = current_user["email"]
-    chat_doc = await chats_collection.find_one({"chat_id": chat_id})
-    if not chat_doc:
-        raise HTTPException(status_code=404, detail="Chat not found")
-
-    updated_messages = [
-        {**msg, "read": True} if msg["sender"] != user_email else msg
-        for msg in chat_doc.get("messages", [])
-    ]
-
-    await chats_collection.update_one(
-        {"chat_id": chat_id},
-        {"$set": {"messages": updated_messages}}
-    )
-
-    return {"status": "Messages marked as read"}
+            # Broadcast the new message to all clients connected to this chat
+            await manager.broadcast(chat_id, {"new_message": new_message})
+    except WebSocketDisconnect:
+        manager.disconnect(chat_id, websocket)

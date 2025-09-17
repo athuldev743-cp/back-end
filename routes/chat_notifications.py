@@ -5,20 +5,17 @@ import os
 
 router = APIRouter()
 
-# ---------------- MongoDB Setup (Async with Motor) ----------------
-MONGO_URI = os.getenv("MONGO_URI") or "your_mongo_uri_here"
+MONGO_URI = os.getenv("MONGO_URI", "your_mongo_uri_here")
 client = AsyncIOMotorClient(MONGO_URI)
 db = client.real_estate
 chats_collection = db.chats
 
-# ---------------- Get Unread Messages ----------------
 @router.get("/notifications")
-async def get_unread_chats(current_user: dict = Depends(get_current_user)):
+async def get_unread_chats(current_user=Depends(get_current_user)):
     user_email = current_user.get("email")
     if not user_email:
         raise HTTPException(status_code=400, detail="User email not found")
 
-    # Find chats where user has unread messages
     cursor = chats_collection.find(
         {
             "participants": user_email,
@@ -43,16 +40,14 @@ async def get_unread_chats(current_user: dict = Depends(get_current_user)):
 
     return {"notifications": result}
 
-# ---------------- Mark Messages as Read ----------------
 @router.post("/mark-read/{chat_id}")
-async def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
+async def mark_messages_as_read(chat_id: str, current_user=Depends(get_current_user)):
     user_email = current_user.get("email")
     if not user_email:
         raise HTTPException(status_code=400, detail="User email not found")
 
     query = {"chat_id": chat_id, "participants": user_email}
 
-    # Mark all unread messages NOT sent by this user as read
     result = await chats_collection.update_one(
         query,
         {"$set": {"messages.$[elem].read": True}},

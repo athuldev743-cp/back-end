@@ -27,5 +27,5 @@ async def get_current_user(authorization: str | None = Header(None)):
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         return user
-    except JWTError as exc:
+    except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
