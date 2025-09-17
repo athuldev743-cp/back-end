@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import datetime
 from bson import ObjectId
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import List, Optional
 from routes.auth import get_current_user
-from database import db
+from database import db  # Ensure db is a Motor async client!!
 
 router = APIRouter()
 
@@ -21,11 +22,29 @@ class PropertyIn(BaseModel):
 class MessageIn(BaseModel):
     text: str
 
+class MessageOut(BaseModel):
+    sender: str
+    text: str
+    timestamp: datetime
+    read: bool
+
+class ChatOut(BaseModel):
+    chatId: str
+    messages: List[MessageOut]
+
+class PropertyOut(BaseModel):
+    _id: str = Field(alias="id")
+    title: str
+    category: str
+    location: str
+    description: str
+    owner_email: str
+    created_at: datetime
+
 # ---------------- ADD PROPERTY ----------------
-@router.post("/add-property")
+@router.post("/add-property", response_model=PropertyOut)
 async def add_property(data: PropertyIn, current_user: dict = Depends(get_current_user)):
     owner_email = current_user["email"]
-
     new_property = {
         "title": data.title,
         "category": data.category,
@@ -34,43 +53,39 @@ async def add_property(data: PropertyIn, current_user: dict = Depends(get_curren
         "owner_email": owner_email,
         "created_at": datetime.utcnow()
     }
-
-    result = properties_collection.insert_one(new_property)
+    result = await properties_collection.insert_one(new_property)
     new_property["_id"] = str(result.inserted_id)
     return new_property
 
 # ---------------- GET OR CREATE CHAT ----------------
-@router.get("/property/{property_id}")
+@router.get("/property/{property_id}", response_model=ChatOut)
 async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_current_user)):
     user_email = current_user["email"]
 
-    # Convert property_id string to ObjectId
+    # Convert property_id to ObjectId
     try:
         prop_oid = ObjectId(property_id)
-    except:
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid property ID")
 
-    property_doc = properties_collection.find_one({"_id": prop_oid})
+    property_doc = await properties_collection.find_one({"_id": prop_oid})
     if not property_doc:
         raise HTTPException(status_code=404, detail="Property not found")
 
-    # Ensure owner_email exists
     owner_email = property_doc.get("owner_email")
     if not owner_email:
-        # If missing, fallback to current user as owner
         owner_email = user_email
-        properties_collection.update_one(
+        await properties_collection.update_one(
             {"_id": prop_oid},
             {"$set": {"owner_email": owner_email}}
         )
 
-    # Prevent user from chatting with self
     if owner_email == user_email:
-        raise HTTPException(status_code=400, detail="Cannot chat with your own property")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot chat with your own property")
 
     # Check if chat exists
-    chat_doc = chats_collection.find_one({
-        "property_id": property_id,
+    chat_doc = await chats_collection.find_one({
+        "property_id": str(property_id),
         "participants": {"$all": [user_email, owner_email]}
     })
 
@@ -79,21 +94,25 @@ async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_
         chat_id = f"{property_id}_{user_email}_{int(datetime.utcnow().timestamp())}"
         chat_doc = {
             "chat_id": chat_id,
-            "property_id": property_id,
+            "property_id": str(property_id),
             "participants": [user_email, owner_email],
             "property_owner": owner_email,
             "messages": [],
             "last_message": None
         }
-        chats_collection.insert_one(chat_doc)
+        await chats_collection.insert_one(chat_doc)
 
-    return {"chatId": chat_doc["chat_id"], "messages": chat_doc.get("messages", [])}
+    chat_doc = await chats_collection.find_one({"chat_id": chat_doc["chat_id"]})
+
+    # Format messages for output
+    messages = chat_doc.get("messages", []) or []
+    return {"chatId": chat_doc["chat_id"], "messages": messages}
 
 # ---------------- SEND MESSAGE ----------------
 @router.post("/chat/{chat_id}/send")
 async def send_message(chat_id: str, message: MessageIn, current_user: dict = Depends(get_current_user)):
     user_email = current_user["email"]
-    chat_doc = chats_collection.find_one({"chat_id": chat_id})
+    chat_doc = await chats_collection.find_one({"chat_id": chat_id})
     if not chat_doc:
         raise HTTPException(status_code=404, detail="Chat not found")
 
@@ -104,7 +123,7 @@ async def send_message(chat_id: str, message: MessageIn, current_user: dict = De
         "read": False
     }
 
-    chats_collection.update_one(
+    await chats_collection.update_one(
         {"chat_id": chat_id},
         {"$push": {"messages": new_message}, "$set": {"last_message": new_message}}
     )
@@ -115,13 +134,13 @@ async def send_message(chat_id: str, message: MessageIn, current_user: dict = De
 @router.get("/inbox")
 async def get_inbox(current_user: dict = Depends(get_current_user)):
     user_email = current_user["email"]
-    chats = list(chats_collection.find({"participants": user_email}, {"_id": 0}))
+    chats = await chats_collection.find({"participants": user_email}, {"_id": 0}).to_list(100)
     return {"chats": chats}
 
 # ---------------- GET CHAT MESSAGES ----------------
 @router.get("/chat/{chat_id}/messages")
 async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_current_user)):
-    chat_doc = chats_collection.find_one({"chat_id": chat_id})
+    chat_doc = await chats_collection.find_one({"chat_id": chat_id})
     if not chat_doc:
         raise HTTPException(status_code=404, detail="Chat not found")
     return {"messages": chat_doc.get("messages", [])}
@@ -130,7 +149,7 @@ async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_curre
 @router.post("/chat/mark-read/{chat_id}")
 async def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_current_user)):
     user_email = current_user["email"]
-    chat_doc = chats_collection.find_one({"chat_id": chat_id})
+    chat_doc = await chats_collection.find_one({"chat_id": chat_id})
     if not chat_doc:
         raise HTTPException(status_code=404, detail="Chat not found")
 
@@ -139,7 +158,7 @@ async def mark_messages_as_read(chat_id: str, current_user: dict = Depends(get_c
         for msg in chat_doc.get("messages", [])
     ]
 
-    chats_collection.update_one(
+    await chats_collection.update_one(
         {"chat_id": chat_id},
         {"$set": {"messages": updated_messages}}
     )
