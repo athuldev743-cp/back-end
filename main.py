@@ -6,6 +6,7 @@ from routes.location import router as location_router
 from routes.cart import cart_router
 import logging
 
+
 app = FastAPI()
 
 # -------------------- Logging --------------------

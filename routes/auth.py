@@ -100,19 +100,17 @@ def format_user_response(user: dict, access_token: str | None = None, refresh_to
 
 # ---------------- Routes ----------------
 @router.post("/register")
-def register(request: UserRegister):
-    existing = db.users.find_one({"email": request.email})
+async def register(request: UserRegister):
+    existing = await db.users.find_one({"email": request.email})
 
     otp = str(random.randint(100000, 999999))
     expiry_time = datetime.utcnow() + timedelta(minutes=5)
     hashed_pw = hash_password(request.password)
 
     if existing:
-        # If verified, prevent duplicate registration
         if existing.get("is_verified"):
             raise HTTPException(status_code=400, detail="Email already registered")
-        # Update user with new OTP/password/fullName/phone
-        db.users.update_one(
+        await db.users.update_one(
             {"email": request.email},
             {"$set": {
                 "otp": otp,
@@ -126,8 +124,7 @@ def register(request: UserRegister):
             raise HTTPException(status_code=500, detail="Failed to send OTP email")
         return {"message": "Email already registered but not verified. New OTP sent."}
 
-    # New user
-    db.users.insert_one({
+    await db.users.insert_one({
         "fullName": request.fullName,
         "email": request.email,
         "password": hashed_pw,
@@ -136,7 +133,7 @@ def register(request: UserRegister):
         "otp_expires": expiry_time,
         "is_verified": False,
         "activities": [],
-        "refresh_token": None  # placeholder for refresh token storage
+        "refresh_token": None
     })
 
     if not send_otp_email(request.email, otp):
@@ -145,8 +142,8 @@ def register(request: UserRegister):
     return {"message": "OTP sent to your email. Verify to complete registration."}
 
 @router.post("/resend-otp")
-def resend_otp(request: ResendOTPRequest):
-    user = db.users.find_one({"email": request.email})
+async def resend_otp(request: ResendOTPRequest):
+    user = await db.users.find_one({"email": request.email})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.get("is_verified"):
@@ -155,7 +152,7 @@ def resend_otp(request: ResendOTPRequest):
     otp = str(random.randint(100000, 999999))
     expiry_time = datetime.utcnow() + timedelta(minutes=5)
 
-    db.users.update_one(
+    await db.users.update_one(
         {"email": request.email},
         {"$set": {"otp": otp, "otp_expires": expiry_time}}
     )
@@ -166,8 +163,8 @@ def resend_otp(request: ResendOTPRequest):
     return {"message": "New OTP sent to your email."}
 
 @router.post("/verify-otp")
-def verify_otp(request: UserVerifyOTP):
-    user = db.users.find_one({"email": request.email})
+async def verify_otp(request: UserVerifyOTP):
+    user = await db.users.find_one({"email": request.email})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.get("otp") != request.otp:
@@ -175,26 +172,23 @@ def verify_otp(request: UserVerifyOTP):
     if datetime.utcnow() > user.get("otp_expires", datetime.utcnow()):
         raise HTTPException(status_code=400, detail="OTP expired")
 
-    # Mark verified and clear otp fields
-    db.users.update_one(
+    await db.users.update_one(
         {"email": request.email},
         {"$set": {"is_verified": True}, "$unset": {"otp": "", "otp_expires": ""}}
     )
 
-    # fetch updated user
-    user = db.users.find_one({"email": request.email})
+    user = await db.users.find_one({"email": request.email})
 
-    # Create tokens (access + refresh) and store refresh token in DB
     access_token = create_access_token_for_user(request.email)
     refresh_token = create_refresh_token_for_user(request.email)
 
-    db.users.update_one({"email": request.email}, {"$set": {"refresh_token": refresh_token}})
+    await db.users.update_one({"email": request.email}, {"$set": {"refresh_token": refresh_token}})
 
     return format_user_response(user, access_token=access_token, refresh_token=refresh_token)
 
 @router.post("/login")
-def login(request: UserLogin):
-    user = db.users.find_one({"email": request.email})
+async def login(request: UserLogin):
+    user = await db.users.find_one({"email": request.email})
     if not user or not verify_password(request.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.get("is_verified", False):
@@ -203,57 +197,49 @@ def login(request: UserLogin):
     access_token = create_access_token_for_user(request.email)
     refresh_token = create_refresh_token_for_user(request.email)
 
-    # Rotate refresh token (replace stored token)
-    db.users.update_one({"email": request.email}, {"$set": {"refresh_token": refresh_token}})
+    await db.users.update_one({"email": request.email}, {"$set": {"refresh_token": refresh_token}})
 
     return format_user_response(user, access_token=access_token, refresh_token=refresh_token)
 
 @router.post("/refresh-token")
-def refresh_token(req: RefreshTokenRequest):
+async def refresh_token(req: RefreshTokenRequest):
     token = req.refresh_token
     if not token:
         raise HTTPException(status_code=400, detail="Refresh token required")
 
-    # Verify token signature & expiry
     try:
         payload = jwt.decode(token, REFRESH_SECRET, algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-    # Ensure token type is refresh
     if payload.get("type") != "refresh" or "email" not in payload:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     email = payload.get("email")
-    user = db.users.find_one({"email": email})
+    user = await db.users.find_one({"email": email})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Check if token matches the one stored (simple rotation check)
     stored = user.get("refresh_token")
     if not stored or stored != token:
-        # token was revoked or doesn't match
         raise HTTPException(status_code=401, detail="Refresh token revoked or invalid")
 
-    # Issue new tokens (rotate refresh token)
     new_access = create_access_token_for_user(email)
     new_refresh = create_refresh_token_for_user(email)
 
-    db.users.update_one({"email": email}, {"$set": {"refresh_token": new_refresh}})
+    await db.users.update_one({"email": email}, {"$set": {"refresh_token": new_refresh}})
 
-    user = db.users.find_one({"email": email})
+    user = await db.users.find_one({"email": email})
     return format_user_response(user, access_token=new_access, refresh_token=new_refresh)
 
 @router.post("/logout")
-def logout(current_user: dict = Depends(get_current_user)):
-    # Remove refresh token from DB to revoke
+async def logout(current_user: dict = Depends(get_current_user)):
     email = current_user.get("email")
-    db.users.update_one({"email": email}, {"$set": {"refresh_token": None}})
+    await db.users.update_one({"email": email}, {"$set": {"refresh_token": None}})
     return {"message": "Logged out successfully"}
 
 @router.get("/me")
-def get_me(current_user: dict = Depends(get_current_user)):
+async def get_me(current_user: dict = Depends(get_current_user)):
     if not current_user:
         raise HTTPException(status_code=404, detail="User not found")
-    # Always return the latest safe fields (no tokens)
     return format_user_response(current_user)
