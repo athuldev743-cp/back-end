@@ -160,7 +160,7 @@ def delete_property(property_id: str, current_user: dict = Depends(get_current_u
 
 # -------------------- Chat Endpoints --------------------
 
-# ✅ Get or create chat for a property
+# 1️⃣ Get or create chat for a property
 @router.get("/chat/property/{property_id}")
 async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_current_user)):
     try:
@@ -174,25 +174,39 @@ async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_
     chat = db.chats.find_one({"propertyId": property_id_str})
 
     if not chat:
-        new_chat = {"propertyId": property_id_str, "messages": []}
+        new_chat = {
+            "propertyId": property_id_str,
+            "owner": prop["owner"],        # store owner email
+            "buyer": current_user["email"],# store buyer email
+            "messages": []
+        }
         result = db.chats.insert_one(new_chat)
         return {
             "chat_id": str(result.inserted_id),
             "property_id": property_id_str,
+            "owner": prop["owner"],
+            "buyer": current_user["email"],
             "messages": []
         }
+
+    # Update buyer if not set
+    if "buyer" not in chat or not chat["buyer"]:
+        db.chats.update_one({"_id": chat["_id"]}, {"$set": {"buyer": current_user["email"]}})
 
     return {
         "chat_id": str(chat["_id"]),
         "property_id": chat["propertyId"],
+        "owner": chat["owner"],
+        "buyer": chat.get("buyer"),
         "messages": chat.get("messages", [])
     }
 
-#send message
+
+# 2️⃣ Send a message
 @router.post("/chat/{chat_id}/send")
 async def send_chat_message(
     chat_id: str,
-    payload: ChatMessage,   # 👈 use the Pydantic model
+    payload: ChatMessage,
     current_user: dict = Depends(get_current_user),
 ):
     text = payload.text.strip()
@@ -205,7 +219,7 @@ async def send_chat_message(
         "timestamp": datetime.utcnow().isoformat(),
     }
 
-    result = db.chats.update_one(   # 👈 no await, use db.chats
+    result = db.chats.update_one(
         {"_id": ObjectId(chat_id)},
         {"$push": {"messages": message}},
     )
@@ -216,7 +230,7 @@ async def send_chat_message(
     return {"message": "Message sent", "data": message}
 
 
-# ✅ Owner inbox (normalized response)
+# 3️⃣ Owner Inbox
 @router.get("/chat/inbox")
 async def owner_inbox(current_user: dict = Depends(get_current_user)):
     user_email = current_user["email"]
@@ -234,21 +248,45 @@ async def owner_inbox(current_user: dict = Depends(get_current_user)):
     for c in chats:
         messages = c.get("messages", [])
         last_message = messages[-1] if messages else None
-
-        # Count unread messages (basic version)
         unread_count = sum(1 for m in messages if m["sender"] != user_email)
 
         formatted_chats.append({
             "chat_id": str(c["_id"]),
             "property_id": c["propertyId"],
-            "user_name": (last_message["sender"] if last_message else "Unknown"),
+            "buyer": c.get("buyer", "Unknown"),
             "last_message": last_message,
             "unread_count": unread_count
         })
 
     return formatted_chats
 
-# ✅ Get messages for a specific chat
+
+# 4️⃣ Buyer Inbox
+@router.get("/chat/buyer-inbox")
+async def buyer_inbox(current_user: dict = Depends(get_current_user)):
+    user_email = current_user["email"]
+
+    # Chats where user is buyer or sent a message
+    chats = list(db.chats.find({"$or": [{"buyer": user_email}, {"messages.sender": user_email}]}))
+
+    formatted_chats = []
+    for c in chats:
+        messages = c.get("messages", [])
+        last_message = messages[-1] if messages else None
+        unread_count = sum(1 for m in messages if m["sender"] != user_email)
+
+        formatted_chats.append({
+            "chat_id": str(c["_id"]),
+            "property_id": c["propertyId"],
+            "owner": c.get("owner", "Unknown"),
+            "last_message": last_message,
+            "unread_count": unread_count
+        })
+
+    return formatted_chats
+
+
+# 5️⃣ Get messages for a specific chat
 @router.get("/chat/{chat_id}/messages")
 async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_current_user)):
     try:
@@ -261,5 +299,7 @@ async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_curre
     return {
         "chat_id": str(chat["_id"]),
         "property_id": chat["propertyId"],
+        "owner": chat.get("owner"),
+        "buyer": chat.get("buyer"),
         "messages": chat.get("messages", [])
     }
