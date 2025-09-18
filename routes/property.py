@@ -6,10 +6,17 @@ from routes.dependencies import get_current_user
 from bson import ObjectId
 from datetime import datetime
 import json
+from pydantic import BaseModel
+
 
 router = APIRouter()
 
+class ChatMessage(BaseModel):
+    text: str
+
 VALID_CATEGORIES = ["house", "villa", "apartment", "farmlands", "plots", "buildings"]
+
+
 
 # ---------------- Add Property ----------------
 @router.post("/add-property")
@@ -150,9 +157,10 @@ def delete_property(property_id: str, current_user: dict = Depends(get_current_u
     db.chats.delete_many({"propertyId": property_id})
     return {"message": "Property deleted successfully"}
 
+
 # -------------------- Chat Endpoints --------------------
 
-# Get or create chat for a property
+# ✅ Get or create chat for a property
 @router.get("/chat/property/{property_id}")
 async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_current_user)):
     try:
@@ -164,54 +172,83 @@ async def get_or_create_chat(property_id: str, current_user: dict = Depends(get_
 
     property_id_str = str(property_id)
     chat = db.chats.find_one({"propertyId": property_id_str})
+
     if not chat:
         new_chat = {"propertyId": property_id_str, "messages": []}
         result = db.chats.insert_one(new_chat)
-        new_chat["_id"] = str(result.inserted_id)
-        return {"chatId": new_chat["_id"], "messages": []}
+        return {
+            "chat_id": str(result.inserted_id),
+            "property_id": property_id_str,
+            "messages": []
+        }
 
-    chat["_id"] = str(chat["_id"])
-    return {"chatId": chat["_id"], "messages": chat["messages"]}
+    return {
+        "chat_id": str(chat["_id"]),
+        "property_id": chat["propertyId"],
+        "messages": chat.get("messages", [])
+    }
 
-# Send message
+#send message
 @router.post("/chat/{chat_id}/send")
 async def send_chat_message(
     chat_id: str,
-    text: str = Form(...),
-    current_user: dict = Depends(get_current_user)
+    payload: ChatMessage,   # 👈 use the Pydantic model
+    current_user: dict = Depends(get_current_user),
 ):
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="Message text is required")
-
-    try:
-        chat = db.chats.find_one({"_id": ObjectId(chat_id)})
-        if not chat:
-            raise HTTPException(status_code=404, detail="Chat not found")
-    except:
-        raise HTTPException(status_code=400, detail="Invalid chat ID")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     message = {
         "sender": current_user["email"],
         "text": text,
-        "timestamp": datetime.utcnow()
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
-    db.chats.update_one({"_id": ObjectId(chat_id)}, {"$push": {"messages": message}})
-    return {"status": "ok", "message": message}
+    result = db.chats.update_one(   # 👈 no await, use db.chats
+        {"_id": ObjectId(chat_id)},
+        {"$push": {"messages": message}},
+    )
 
-# Owner inbox
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    return {"message": "Message sent", "data": message}
+
+
+# ✅ Owner inbox (normalized response)
 @router.get("/chat/inbox")
 async def owner_inbox(current_user: dict = Depends(get_current_user)):
     user_email = current_user["email"]
+
+    # Find properties owned by this user
     properties = list(db.properties.find({"owner": user_email}, {"_id": 1}))
     property_ids = [str(p["_id"]) for p in properties]
 
-    chats = list(db.chats.find({"propertyId": {"$in": property_ids}}))
-    for c in chats:
-        c["_id"] = str(c["_id"])
-    return {"chats": chats}
+    if not property_ids:
+        return []
 
-# Get messages for a specific chat
+    chats = list(db.chats.find({"propertyId": {"$in": property_ids}}))
+
+    formatted_chats = []
+    for c in chats:
+        messages = c.get("messages", [])
+        last_message = messages[-1] if messages else None
+
+        # Count unread messages (basic version)
+        unread_count = sum(1 for m in messages if m["sender"] != user_email)
+
+        formatted_chats.append({
+            "chat_id": str(c["_id"]),
+            "property_id": c["propertyId"],
+            "user_name": (last_message["sender"] if last_message else "Unknown"),
+            "last_message": last_message,
+            "unread_count": unread_count
+        })
+
+    return formatted_chats
+
+# ✅ Get messages for a specific chat
 @router.get("/chat/{chat_id}/messages")
 async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_current_user)):
     try:
@@ -221,4 +258,8 @@ async def get_chat_messages(chat_id: str, current_user: dict = Depends(get_curre
     except:
         raise HTTPException(status_code=400, detail="Invalid chat ID")
 
-    return {"messages": chat["messages"]}
+    return {
+        "chat_id": str(chat["_id"]),
+        "property_id": chat["propertyId"],
+        "messages": chat.get("messages", [])
+    }
