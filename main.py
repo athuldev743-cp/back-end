@@ -1,9 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ Import all routers
+# Import all routers
 from routes import auth, property as property_routes, cart, location
-# Chat endpoints are already inside property.py, so no separate import
 
 app = FastAPI(title="Real Estate Backend", version="1.0.0")
 
@@ -24,19 +23,15 @@ app.add_middleware(
 # ---------------- Routers ----------------
 # Auth
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(auth.router, prefix="/auth", tags=["auth-legacy"])  # legacy fallback
 
-# Property (includes chat endpoints)
+# Property routes (includes chat endpoints)
 app.include_router(property_routes.router, prefix="/api", tags=["property"])
-app.include_router(property_routes.router, prefix="", tags=["property-legacy"])  # legacy fallback
 
-# Cart
+# Cart routes
 app.include_router(cart.cart_router, prefix="/api", tags=["cart"])
-app.include_router(cart.cart_router, prefix="", tags=["cart-legacy"])  # legacy fallback
 
 # Location search
 app.include_router(location.router, prefix="/api", tags=["location"])
-app.include_router(location.router, prefix="", tags=["location-legacy"])  # legacy fallback
 
 # ---------------- Root ----------------
 @app.get("/")
