@@ -26,7 +26,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
+    expose_headers=["*"],  # allow frontend to read headers if needed
 )
 
 # -------------------- Debug middleware --------------------
@@ -51,10 +51,7 @@ def root():
 
 # -------------------- Routers --------------------
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
-
-# === Removed /api prefix here ===
-app.include_router(property.router, prefix="", tags=["property"])
-
+app.include_router(property.router, prefix="/api", tags=["property"])   # ✅ restored /api
 app.include_router(user.router, prefix="/user", tags=["user"])
-app.include_router(location_router, prefix="", tags=["location"])
-app.include_router(cart_router, prefix="", tags=["cart"])
+app.include_router(location_router, prefix="/api")
+app.include_router(cart_router, prefix="/api", tags=["Cart"])
