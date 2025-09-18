@@ -55,6 +55,7 @@ app.include_router(auth.router, prefix="/auth", tags=["auth (legacy)"])
 
 # Property routes
 app.include_router(property.router, prefix="/api", tags=["property"])
+app.include_router(property.router, prefix="", tags=["property (legacy)"])
 
 # User routes
 app.include_router(user.router, prefix="/user", tags=["user"])
